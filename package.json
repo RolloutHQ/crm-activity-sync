@@ -1,0 +1,33 @@
+{
+  "name": "webhooks-test-app",
+  "version": "1.0.0",
+  "description": "Demo Express app for Rollout.com webhook testing",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "node index.js",
+    "client": "npm --prefix client run dev",
+    "build": "npm --prefix client run build",
+    "start": "node index.js",
+    "install:client": "npm --prefix client install",
+    "postinstall": "npm run install:client",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "rollout",
+    "webhooks",
+    "express"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
