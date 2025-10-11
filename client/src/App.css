@@ -26,9 +26,209 @@ h1 {
 }
 
 main {
-  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.card {
   background: #ffffff;
   padding: 1.5rem;
   border-radius: 12px;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.card h2 {
+  margin: 0;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.section-header button {
+  padding: 0.4rem 0.8rem;
+  border-radius: 8px;
+  border: 1px solid #d0d7de;
+  background: #f3f4f6;
+  cursor: pointer;
+}
+
+.section-header button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.credential-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.credential-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  background: linear-gradient(180deg, #fff 0%, #fcfcff 100%);
+}
+
+.credential-card header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.credential-card h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.credential-id {
+  font-size: 0.8rem;
+  color: #64748b;
+  word-break: break-all;
+}
+
+.credential-card dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 0.5rem;
+}
+
+.credential-card dt {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.credential-card dd {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.webhook-subscribe {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.event-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.event-buttons button {
+  border: none;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.event-buttons button:disabled {
+  background: #93c5fd;
+  cursor: wait;
+}
+
+.event-buttons button:not(:disabled):hover {
+  background: #1d4ed8;
+}
+
+.card input[type="url"] {
+  width: 100%;
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  border: 1px solid #d0d7de;
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+
+.webhook-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.webhook-credential-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.webhook-credential-selector select {
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid #d0d7de;
+}
+
+.webhook-list li {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.webhook-list .event {
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.webhook-list .url {
+  color: #2563eb;
+  word-break: break-all;
+}
+
+.webhook-list pre {
+  margin: 0;
+  font-size: 0.8rem;
+  background: #f9fafb;
+  padding: 0.5rem;
+  border-radius: 6px;
+}
+
+.error {
+  color: #b91c1c;
+  margin: 0;
+}
+
+.success {
+  color: #047857;
+  margin: 0;
+}
+
+.empty {
+  margin: 0;
+  color: #6b7280;
+}
+
+@media (max-width: 640px) {
+  .app {
+    padding: 1.25rem;
+  }
+
+  .card {
+    padding: 1.25rem;
+  }
 }
