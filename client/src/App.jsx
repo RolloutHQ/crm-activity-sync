@@ -78,6 +78,9 @@ export default function App() {
   const [hasLoadedConsumerKey, setHasLoadedConsumerKey] = useState(false);
   const [savingConsumerKey, setSavingConsumerKey] = useState(false);
   const persistedConsumerKey = useRef(null);
+  const latestConsumerKeyRef = useRef(consumerKey);
+  const credentialsRequestIdRef = useRef(0);
+  const webhooksRequestIdRef = useRef(0);
   const [webhooks, setWebhooks] = useState([]);
   const [webhooksLoading, setWebhooksLoading] = useState(false);
   const [webhooksError, setWebhooksError] = useState(null);
@@ -117,6 +120,11 @@ export default function App() {
     },
     [consumerKey]
   );
+
+  useEffect(() => {
+    latestConsumerKeyRef.current =
+      typeof consumerKey === "string" ? consumerKey.trim() : "";
+  }, [consumerKey]);
 
   const fetchRolloutToken = useCallback(() => {
     const origin =
@@ -314,15 +322,22 @@ export default function App() {
 
   const refreshCredentials = useCallback(async () => {
     const url = buildApiUrl("/api/credentials");
+    const requestId = ++credentialsRequestIdRef.current;
     setCredentialsLoading(true);
     setCredentialsError(null);
     try {
       const data = await fetchJson(url);
-      setCredentials(extractItems(data));
+      if (credentialsRequestIdRef.current === requestId) {
+        setCredentials(extractItems(data));
+      }
     } catch (err) {
-      setCredentialsError(err.message);
+      if (credentialsRequestIdRef.current === requestId) {
+        setCredentialsError(err.message);
+      }
     } finally {
-      setCredentialsLoading(false);
+      if (credentialsRequestIdRef.current === requestId) {
+        setCredentialsLoading(false);
+      }
     }
   }, [buildApiUrl]);
 
@@ -336,15 +351,22 @@ export default function App() {
       }
       setWebhooksLoading(true);
       setWebhooksError(null);
+      const requestId = ++webhooksRequestIdRef.current;
       try {
         const data = await fetchJson(
           buildApiUrl("/api/webhooks", { credentialId: credentialIdToUse })
         );
-        setWebhooks(extractItems(data));
+        if (webhooksRequestIdRef.current === requestId) {
+          setWebhooks(extractItems(data));
+        }
       } catch (err) {
-        setWebhooksError(err.message);
+        if (webhooksRequestIdRef.current === requestId) {
+          setWebhooksError(err.message);
+        }
       } finally {
-        setWebhooksLoading(false);
+        if (webhooksRequestIdRef.current === requestId) {
+          setWebhooksLoading(false);
+        }
       }
     },
     [selectedCredentialId, buildApiUrl]
