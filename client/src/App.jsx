@@ -684,6 +684,15 @@ export default function App() {
     [refreshWebhooks, selectedCredentialId, buildApiUrl]
   );
 
+  const rolloutProviderKey = useMemo(() => {
+    const normalized =
+      typeof consumerKey === "string" ? consumerKey.trim() : "";
+    if (!hasLoadedConsumerKey) {
+      return "loading-consumer-key";
+    }
+    return normalized.length > 0 ? normalized : "default-consumer-key";
+  }, [consumerKey, hasLoadedConsumerKey]);
+
   return (
     <div className="app">
       <header>
@@ -741,8 +750,15 @@ export default function App() {
             Launch Rollout Link to add or remove credentials. The lists below
             refresh automatically after changes.
           </p>
-          <RolloutLinkProvider token={fetchRolloutToken}>
+          {!hasLoadedConsumerKey && (
+            <p className="hint">Loading stored consumer key…</p>
+          )}
+          <RolloutLinkProvider
+            key={rolloutProviderKey}
+            token={fetchRolloutToken}
+          >
             <CredentialsManager
+              key={rolloutProviderKey}
               onCredentialAdded={handleCredentialChange}
               onCredentialDeleted={handleCredentialChange}
             />
