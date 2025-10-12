@@ -17,6 +17,13 @@ const ROLLOUT_CLIENT_ID = process.env.ROLLOUT_CLIENT_ID;
 const ROLLOUT_CLIENT_SECRET = process.env.ROLLOUT_CLIENT_SECRET;
 const DEFAULT_CONSUMER_KEY =
   process.env.ROLLOUT_CONSUMER_KEY || "demo-consumer";
+const DEFAULT_ACCORDION_STATE = {
+  connectProvider: true,
+  connectedCredentials: true,
+  webhookTarget: true,
+  webhookSubscriptions: true,
+  receivedWebhooks: true,
+};
 const TOKEN_TTL_SECS =
   Number(process.env.ROLLOUT_TOKEN_TTL_SECS) || 60 * 60;
 const DEFAULT_WEBHOOK_TARGET =
@@ -50,6 +57,18 @@ function resolveConsumerKey(req, provided) {
     return sessionKey;
   }
   return DEFAULT_CONSUMER_KEY;
+}
+
+function normalizeAccordionState(value) {
+  const normalized = { ...DEFAULT_ACCORDION_STATE };
+  if (value && typeof value === "object") {
+    for (const key of Object.keys(DEFAULT_ACCORDION_STATE)) {
+      if (typeof value[key] === "boolean") {
+        normalized[key] = value[key];
+      }
+    }
+  }
+  return normalized;
 }
 
 if (!fs.existsSync(path.dirname(SESSION_DB_PATH))) {
@@ -369,6 +388,30 @@ app.post("/api/session/consumer-key", (req, res) => {
     consumerKey: sanitized || "",
     effectiveConsumerKey: resolveConsumerKey(req),
   });
+});
+
+app.get("/api/session/accordion", (req, res) => {
+  const stored = req.session.accordionState;
+  const accordionState = normalizeAccordionState(stored);
+  res.json({ accordionState });
+});
+
+app.post("/api/session/accordion", (req, res) => {
+  const { accordionState } = req.body || {};
+  if (
+    !accordionState ||
+    typeof accordionState !== "object" ||
+    Array.isArray(accordionState)
+  ) {
+    res
+      .status(400)
+      .json({ error: "accordionState must be an object containing booleans" });
+    return;
+  }
+
+  const normalized = normalizeAccordionState(accordionState);
+  req.session.accordionState = normalized;
+  res.json({ accordionState: normalized });
 });
 
 app.get("/api/session/webhook-target", (req, res) => {

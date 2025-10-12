@@ -23,6 +23,14 @@ const defaultWebhookUrl =
 const defaultConsumerKey =
   import.meta.env.VITE_ROLLOUT_CONSUMER_KEY || "demo-consumer";
 
+const DEFAULT_ACCORDION_STATE = {
+  connectProvider: true,
+  connectedCredentials: true,
+  webhookTarget: true,
+  webhookSubscriptions: true,
+  receivedWebhooks: true,
+};
+
 async function fetchJson(path, options) {
   const response = await fetch(path, {
     credentials: "same-origin",
@@ -68,6 +76,60 @@ function extractItems(data) {
   return [];
 }
 
+function normalizeAccordionStateClient(state) {
+  const normalized = { ...DEFAULT_ACCORDION_STATE };
+  if (state && typeof state === "object") {
+    for (const key of Object.keys(DEFAULT_ACCORDION_STATE)) {
+      if (typeof state[key] === "boolean") {
+        normalized[key] = state[key];
+      }
+    }
+  }
+  return normalized;
+}
+
+function serializeAccordionState(state) {
+  return JSON.stringify(normalizeAccordionStateClient(state));
+}
+
+function AccordionSection({ id, title, isOpen, onToggle, headerActions, children }) {
+  const contentId = `${id}-content`;
+  const buttonId = `${id}-toggle`;
+  return (
+    <section className="card accordion-section">
+      <div className="accordion-header">
+        <div className="accordion-header-content">
+          <button
+            type="button"
+            className="accordion-toggle"
+            aria-expanded={isOpen}
+            aria-controls={contentId}
+            id={buttonId}
+            onClick={onToggle}
+          >
+            <span className="accordion-indicator" aria-hidden="true">
+              {isOpen ? "▾" : "▸"}
+            </span>
+            <span className="accordion-label">{title}</span>
+          </button>
+        </div>
+        {headerActions ? (
+          <div className="accordion-header-actions">{headerActions}</div>
+        ) : null}
+      </div>
+      <div
+        id={contentId}
+        role="region"
+        aria-labelledby={buttonId}
+        className="accordion-content"
+        hidden={!isOpen}
+      >
+        {children}
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
   const [credentials, setCredentials] = useState([]);
   const [credentialsLoading, setCredentialsLoading] = useState(false);
@@ -81,6 +143,17 @@ export default function App() {
   const latestConsumerKeyRef = useRef(consumerKey);
   const credentialsRequestIdRef = useRef(0);
   const webhooksRequestIdRef = useRef(0);
+  const [accordionState, setAccordionState] = useState(() =>
+    normalizeAccordionStateClient(DEFAULT_ACCORDION_STATE)
+  );
+  const [accordionStatus, setAccordionStatus] = useState("");
+  const [accordionError, setAccordionError] = useState(null);
+  const [hasLoadedAccordionState, setHasLoadedAccordionState] = useState(false);
+  const [savingAccordionState, setSavingAccordionState] = useState(false);
+  const persistedAccordionState = useRef(
+    serializeAccordionState(DEFAULT_ACCORDION_STATE)
+  );
+  const accordionSaveTimeoutRef = useRef(null);
   const [webhooks, setWebhooks] = useState([]);
   const [webhooksLoading, setWebhooksLoading] = useState(false);
   const [webhooksError, setWebhooksError] = useState(null);
@@ -197,6 +270,44 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
+        const data = await fetchJson("/api/session/accordion");
+        if (cancelled) {
+          return;
+        }
+        const normalized = normalizeAccordionStateClient(
+          data?.accordionState
+        );
+        persistedAccordionState.current = serializeAccordionState(normalized);
+        setAccordionState(normalized);
+        setAccordionError(null);
+        setAccordionStatus("");
+      } catch (err) {
+        if (cancelled) {
+          return;
+        }
+        const fallback = normalizeAccordionStateClient(
+          DEFAULT_ACCORDION_STATE
+        );
+        persistedAccordionState.current =
+          serializeAccordionState(fallback);
+        setAccordionState(fallback);
+        setAccordionError(err.message);
+        setAccordionStatus("");
+      } finally {
+        if (!cancelled) {
+          setHasLoadedAccordionState(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
         const data = await fetchJson("/api/session/webhook-target");
         if (cancelled) return;
         const stored =
@@ -261,6 +372,62 @@ export default function App() {
       clearTimeout(handle);
     };
   }, [webhookUrl, hasLoadedWebhookTarget]);
+
+  useEffect(() => {
+    if (!hasLoadedAccordionState) {
+      return;
+    }
+
+    const serialized = serializeAccordionState(accordionState);
+    if (serialized === persistedAccordionState.current) {
+      return;
+    }
+
+    if (accordionSaveTimeoutRef.current) {
+      clearTimeout(accordionSaveTimeoutRef.current);
+      accordionSaveTimeoutRef.current = null;
+    }
+
+    setSavingAccordionState(true);
+    setAccordionError(null);
+    setAccordionStatus("");
+    const normalized = normalizeAccordionStateClient(accordionState);
+    const timeoutId = setTimeout(async () => {
+      try {
+        await fetchJson("/api/session/accordion", {
+          method: "POST",
+          body: JSON.stringify({ accordionState: normalized }),
+        });
+        persistedAccordionState.current = serialized;
+        setAccordionStatus("Section preferences saved for this session.");
+      } catch (err) {
+        setAccordionError(err.message);
+      } finally {
+        setSavingAccordionState(false);
+      }
+    }, 300);
+
+    accordionSaveTimeoutRef.current = timeoutId;
+
+    return () => {
+      clearTimeout(timeoutId);
+      accordionSaveTimeoutRef.current = null;
+      setSavingAccordionState(false);
+    };
+  }, [accordionState, hasLoadedAccordionState]);
+
+  const toggleAccordionSection = useCallback((key) => {
+    setAccordionState((prev) => {
+      const current = normalizeAccordionStateClient(prev);
+      if (!Object.prototype.hasOwnProperty.call(current, key)) {
+        return current;
+      }
+      return {
+        ...current,
+        [key]: !current[key],
+      };
+    });
+  }, []);
 
   useEffect(() => {
     if (!hasLoadedConsumerKey) {
@@ -549,11 +716,27 @@ export default function App() {
             !savingConsumerKey &&
             !consumerKeyError &&
             consumerKeyStatus && <p className="success">{consumerKeyStatus}</p>}
+          {hasLoadedAccordionState && savingAccordionState && (
+            <p className="hint">Saving section preferences…</p>
+          )}
+          {hasLoadedAccordionState && accordionError && (
+            <p className="error">
+              Error saving section preferences: {accordionError}
+            </p>
+          )}
+          {hasLoadedAccordionState &&
+            !savingAccordionState &&
+            !accordionError &&
+            accordionStatus && <p className="success">{accordionStatus}</p>}
         </div>
       </header>
       <main>
-        <section className="card">
-          <h2>Connect a Provider</h2>
+        <AccordionSection
+          id="accordion-connect-provider"
+          title="Connect a Provider"
+          isOpen={accordionState.connectProvider}
+          onToggle={() => toggleAccordionSection("connectProvider")}
+        >
           <p>
             Launch Rollout Link to add or remove credentials. The lists below
             refresh automatically after changes.
@@ -564,11 +747,14 @@ export default function App() {
               onCredentialDeleted={handleCredentialChange}
             />
           </RolloutLinkProvider>
-        </section>
+        </AccordionSection>
 
-        <section className="card">
-          <div className="section-header">
-            <h2>Connected Credentials</h2>
+        <AccordionSection
+          id="accordion-connected-credentials"
+          title="Connected Credentials"
+          isOpen={accordionState.connectedCredentials}
+          onToggle={() => toggleAccordionSection("connectedCredentials")}
+          headerActions={
             <button
               type="button"
               onClick={refreshCredentials}
@@ -576,7 +762,8 @@ export default function App() {
             >
               {credentialsLoading ? "Refreshing…" : "Refresh"}
             </button>
-          </div>
+          }
+        >
           {credentialsError && (
             <p className="error">Error loading credentials: {credentialsError}</p>
           )}
@@ -619,10 +806,14 @@ export default function App() {
               </article>
             ))}
           </div>
-        </section>
+        </AccordionSection>
 
-        <section className="card">
-          <h2>Webhook Target</h2>
+        <AccordionSection
+          id="accordion-webhook-target"
+          title="Webhook Target"
+          isOpen={accordionState.webhookTarget}
+          onToggle={() => toggleAccordionSection("webhookTarget")}
+        >
           <p>
             Provide the URL Rollout should call when events fire. This is usually
             a secure publicly accessible endpoint.
@@ -656,11 +847,14 @@ export default function App() {
           {lastSubscriptionMessage && (
             <p className="success">{lastSubscriptionMessage}</p>
           )}
-        </section>
+        </AccordionSection>
 
-        <section className="card">
-          <div className="section-header">
-            <h2>Webhook Subscriptions</h2>
+        <AccordionSection
+          id="accordion-webhook-subscriptions"
+          title="Webhook Subscriptions"
+          isOpen={accordionState.webhookSubscriptions}
+          onToggle={() => toggleAccordionSection("webhookSubscriptions")}
+          headerActions={
             <button
               type="button"
               onClick={() => refreshWebhooks(selectedCredentialId)}
@@ -668,7 +862,8 @@ export default function App() {
             >
               {webhooksLoading ? "Refreshing…" : "Refresh"}
             </button>
-          </div>
+          }
+        >
           <div className="webhook-credential-selector">
             <label htmlFor="webhook-credential">
               View subscriptions for credential
@@ -727,11 +922,14 @@ export default function App() {
               </li>
             ))}
           </ul>
-        </section>
+        </AccordionSection>
 
-        <section className="card">
-          <div className="section-header">
-            <h2>Received Webhook Events</h2>
+        <AccordionSection
+          id="accordion-received-webhooks"
+          title="Received Webhook Events"
+          isOpen={accordionState.receivedWebhooks}
+          onToggle={() => toggleAccordionSection("receivedWebhooks")}
+          headerActions={
             <div className="section-actions">
               <button
                 type="button"
@@ -743,13 +941,16 @@ export default function App() {
               <button
                 type="button"
                 onClick={clearReceivedWebhooks}
-                disabled={clearingReceivedWebhooks || receivedWebhooks.length === 0}
+                disabled={
+                  clearingReceivedWebhooks || receivedWebhooks.length === 0
+                }
                 className="secondary"
               >
                 {clearingReceivedWebhooks ? "Clearing…" : "Clear"}
               </button>
             </div>
-          </div>
+          }
+        >
           {receivedWebhooksError && (
             <p className="error">
               Error loading received webhooks: {receivedWebhooksError}
@@ -782,7 +983,7 @@ export default function App() {
               );
             })}
           </ul>
-        </section>
+        </AccordionSection>
       </main>
     </div>
   );
