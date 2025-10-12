@@ -52,7 +52,9 @@ main {
   gap: 1rem;
 }
 
-.section-header button {
+.section-header button,
+.section-actions button,
+.webhook-list button {
   padding: 0.4rem 0.8rem;
   border-radius: 8px;
   border: 1px solid #d0d7de;
@@ -60,9 +62,20 @@ main {
   cursor: pointer;
 }
 
-.section-header button:disabled {
+.section-header button:disabled,
+.section-actions button:disabled,
+.webhook-list button:disabled {
   cursor: wait;
   opacity: 0.6;
+}
+
+.section-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.section-actions .secondary {
+  background: #fff;
 }
 
 .credential-list {
@@ -190,14 +203,28 @@ main {
   gap: 0.5rem;
 }
 
-.webhook-list .event {
+.webhook-list li > .event {
   font-weight: 600;
   color: #1f2937;
 }
 
-.webhook-list .url {
+.webhook-list li > .url {
   color: #2563eb;
   word-break: break-all;
+}
+
+.webhook-list button {
+  align-self: flex-start;
+}
+
+.webhook-list button.danger {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+
+.webhook-list button.danger:not(:disabled):hover {
+  background: #fecaca;
 }
 
 .webhook-list pre {
@@ -206,6 +233,60 @@ main {
   background: #f9fafb;
   padding: 0.5rem;
   border-radius: 6px;
+}
+
+.received-webhook-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.received-webhook-list li {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.received-webhook-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.received-webhook-meta .event {
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.received-webhook-meta .timestamp {
+  font-size: 0.85rem;
+  color: #64748b;
+}
+
+.received-webhook-list details {
+  background: #fff;
+  border-radius: 8px;
+  padding: 0.5rem;
+}
+
+.received-webhook-list details summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.received-webhook-list pre {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .error {

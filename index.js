@@ -1,6 +1,8 @@
 const path = require("path");
 const fs = require("fs");
+const { randomUUID } = require("crypto");
 const express = require("express");
+const session = require("express-session");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
@@ -11,6 +13,20 @@ const ROLLOUT_API_BASE =
   process.env.ROLLOUT_API_BASE || "https://universal.rollout.com/api";
 const ROLLOUT_CRM_API_BASE =
   process.env.ROLLOUT_CRM_API_BASE || "https://crm.universal.rollout.com/api";
+const ROLLOUT_CLIENT_ID = process.env.ROLLOUT_CLIENT_ID;
+const ROLLOUT_CLIENT_SECRET = process.env.ROLLOUT_CLIENT_SECRET;
+const DEFAULT_CONSUMER_KEY =
+  process.env.ROLLOUT_CONSUMER_KEY || "demo-consumer";
+const TOKEN_TTL_SECS =
+  Number(process.env.ROLLOUT_TOKEN_TTL_SECS) || 60 * 60;
+const DEFAULT_WEBHOOK_TARGET =
+  process.env.DEFAULT_WEBHOOK_TARGET || "http://localhost:5174/webhooks";
+const MAX_RECEIVED_WEBHOOKS =
+  Number(process.env.MAX_RECEIVED_WEBHOOKS) || 100;
+const SESSION_SECRET = process.env.SESSION_SECRET || "rollout-demo-secret";
+const SESSION_MAX_AGE_MS =
+  Number(process.env.SESSION_MAX_AGE_MS) || 1000 * 60 * 60 * 6;
+const receivedWebhooks = [];
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ||
   "http://localhost:5173")
@@ -29,9 +45,24 @@ app.use(
               callback(new Error("Not allowed by CORS"));
             }
           },
+          credentials: true,
         }
       : undefined
   )
+);
+
+app.use(
+  session({
+    name: "rollout.sid",
+    secret: SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      maxAge: SESSION_MAX_AGE_MS,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    },
+  })
 );
 
 app.use(express.json());
@@ -42,21 +73,19 @@ app.use((req, res, next) => {
 });
 
 app.post("/webhooks", (req, res) => {
-  console.log("Received Rollout webhook:", {
+  const payload = {
+    id: randomUUID(),
+    receivedAt: new Date().toISOString(),
     headers: req.headers,
     body: req.body,
-  });
+  };
+  console.log("Received Rollout webhook:", payload);
+  receivedWebhooks.unshift(payload);
+  if (receivedWebhooks.length > MAX_RECEIVED_WEBHOOKS) {
+    receivedWebhooks.length = MAX_RECEIVED_WEBHOOKS;
+  }
   res.status(204).end();
 });
-
-const ROLLOUT_CLIENT_ID = process.env.ROLLOUT_CLIENT_ID;
-const ROLLOUT_CLIENT_SECRET = process.env.ROLLOUT_CLIENT_SECRET;
-const DEFAULT_CONSUMER_KEY =
-  process.env.ROLLOUT_CONSUMER_KEY || "demo-consumer";
-const TOKEN_TTL_SECS =
-  Number(process.env.ROLLOUT_TOKEN_TTL_SECS) || 60 * 60;
-const DEFAULT_WEBHOOK_TARGET =
-  process.env.DEFAULT_WEBHOOK_TARGET || "http://localhost:5174/webhooks";
 
 function createRolloutToken(consumerKey = DEFAULT_CONSUMER_KEY) {
   if (!ROLLOUT_CLIENT_ID || !ROLLOUT_CLIENT_SECRET) {
@@ -270,6 +299,71 @@ app.post("/api/webhooks", async (req, res) => {
       .status(status)
       .json({ error: "Failed to create webhook", details: err.body });
   }
+});
+
+app.get("/api/session/webhook-target", (req, res) => {
+  const storedTarget = req.session.webhookTarget;
+  res.json({
+    webhookTarget:
+      typeof storedTarget === "string" && storedTarget.length > 0
+        ? storedTarget
+        : DEFAULT_WEBHOOK_TARGET,
+  });
+});
+
+app.post("/api/session/webhook-target", (req, res) => {
+  const { webhookTarget } = req.body || {};
+  if (typeof webhookTarget !== "string") {
+    res.status(400).json({ error: "webhookTarget must be a string" });
+    return;
+  }
+
+  req.session.webhookTarget = webhookTarget.trim();
+  res.json({ webhookTarget: req.session.webhookTarget });
+});
+
+app.delete("/api/webhooks/:id", async (req, res) => {
+  const { id } = req.params;
+  const { credentialId, consumerKey } = req.query;
+
+  if (!id) {
+    res.status(400).json({ error: "Webhook id is required" });
+    return;
+  }
+
+  if (!credentialId) {
+    res.status(400).json({ error: "credentialId query parameter is required" });
+    return;
+  }
+
+  try {
+    await callRolloutApi({
+      baseUrl: ROLLOUT_CRM_API_BASE,
+      path: `/webhooks/${id}`,
+      method: "DELETE",
+      consumerKey: consumerKey || DEFAULT_CONSUMER_KEY,
+      headers: {
+        "x-rollout-credential-id": credentialId,
+      },
+    });
+    res.status(204).end();
+  } catch (err) {
+    console.error("Error deleting webhook subscription", err);
+    const status = err.status || 500;
+    res
+      .status(status)
+      .json({ error: "Failed to delete webhook", details: err.body });
+  }
+});
+
+app.get("/api/received-webhooks", (_req, res) => {
+  res.json(receivedWebhooks);
+});
+
+app.delete("/api/received-webhooks", (_req, res) => {
+  receivedWebhooks.length = 0;
+  console.log("[Server] Cleared received webhook log");
+  res.status(204).end();
 });
 
 const clientDistPath = path.join(__dirname, "client", "dist");
