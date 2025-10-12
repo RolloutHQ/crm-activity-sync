@@ -77,6 +77,9 @@ if (!fs.existsSync(path.dirname(SESSION_DB_PATH))) {
 
 const SQLiteStore = require("connect-sqlite3")(session);
 
+// Respect the Render proxy so secure cookies are transmitted correctly.
+app.set("trust proxy", 1);
+
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ||
   "http://localhost:5173")
   .split(",")
