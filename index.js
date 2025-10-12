@@ -33,7 +33,7 @@ const MAX_RECEIVED_WEBHOOKS =
   Number(process.env.MAX_RECEIVED_WEBHOOKS) || 100;
 const SESSION_SECRET = process.env.SESSION_SECRET || "rollout-demo-secret";
 const SESSION_MAX_AGE_MS =
-  Number(process.env.SESSION_MAX_AGE_MS) || 1000 * 60 * 60 * 6;
+  Number(process.env.SESSION_MAX_AGE_MS) || 1000 * 60 * 60 * 12;
 const SESSION_DB_PATH =
   process.env.SESSION_DB_PATH ||
   path.join(__dirname, "session-data", "sessions.sqlite");
