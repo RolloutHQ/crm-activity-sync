@@ -367,13 +367,16 @@ app.delete("/api/received-webhooks", (_req, res) => {
 });
 
 const clientDistPath = path.join(__dirname, "client", "dist");
-if (fs.existsSync(clientDistPath)) {
-  app.use(express.static(clientDistPath));
+app.use(express.static(clientDistPath));
 
-  app.get("*", (_req, res) => {
-    res.sendFile(path.join(clientDistPath, "index.html"));
-  });
-}
+app.get("*", (_req, res, next) => {
+  const indexPath = path.join(clientDistPath, "index.html");
+  if (!fs.existsSync(indexPath)) {
+    next();
+    return;
+  }
+  res.sendFile(indexPath);
+});
 
 app.listen(port, () => {
   console.log(`Server listening on http://localhost:${port}`);
