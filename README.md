@@ -43,7 +43,7 @@ This produces the production React build in `client/dist`. When present, Express
    - `DEFAULT_WEBHOOK_TARGET`
    - `ALLOWED_ORIGINS` (include your Render URL, e.g. `https://your-app.onrender.com`)
    - `SESSION_SECRET` (use a long random string)
-   - Optional: `SESSION_DB_PATH` (defaults to `./session-data/sessions.sqlite`), `SESSION_MAX_AGE_MS`, `MAX_RECEIVED_WEBHOOKS`, `ROLLOUT_TOKEN_TTL_SECS`
+   - Optional: `SESSION_DB_PATH` (defaults to `./session-data/sessions.sqlite`), `WEBHOOK_DB_PATH` (defaults to `./session-data/webhooks.sqlite`), `SESSION_MAX_AGE_MS`, `MAX_RECEIVED_WEBHOOKS`, `ROLLOUT_TOKEN_TTL_SECS`
 4. **Deploy**. Render will install dependencies, build the client, and run `npm start`.
 5. **Verify** by visiting the Render URL (for example, `https://your-app.onrender.com`) and testing credential listing, webhook subscription, and the webhook log UI.
 

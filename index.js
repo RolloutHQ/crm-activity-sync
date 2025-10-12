@@ -5,6 +5,7 @@ const express = require("express");
 const session = require("express-session");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
+const Database = require("better-sqlite3");
 require("dotenv").config();
 
 const app = express();
@@ -37,7 +38,12 @@ const SESSION_MAX_AGE_MS =
 const SESSION_DB_PATH =
   process.env.SESSION_DB_PATH ||
   path.join(__dirname, "session-data", "sessions.sqlite");
-const receivedWebhooks = [];
+const WEBHOOK_DB_PATH =
+  process.env.WEBHOOK_DB_PATH ||
+  path.join(__dirname, "session-data", "webhooks.sqlite");
+
+let webhookDb;
+let sessionDb;
 
 function sanitizeConsumerKey(value) {
   if (typeof value !== "string") {
@@ -71,11 +77,210 @@ function normalizeAccordionState(value) {
   return normalized;
 }
 
-if (!fs.existsSync(path.dirname(SESSION_DB_PATH))) {
-  fs.mkdirSync(path.dirname(SESSION_DB_PATH), { recursive: true });
+const dataDir = path.dirname(SESSION_DB_PATH);
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
 }
 
-const SQLiteStore = require("connect-sqlite3")(session);
+sessionDb = new Database(SESSION_DB_PATH);
+sessionDb.pragma("journal_mode = WAL");
+sessionDb.exec(`
+  CREATE TABLE IF NOT EXISTS sessions (
+    sid TEXT PRIMARY KEY,
+    sess TEXT NOT NULL,
+    expired INTEGER NOT NULL
+  )
+`);
+
+webhookDb = new Database(WEBHOOK_DB_PATH);
+webhookDb.pragma("journal_mode = WAL");
+webhookDb.exec(`
+  CREATE TABLE IF NOT EXISTS received_webhooks (
+    id TEXT PRIMARY KEY,
+    received_at TEXT NOT NULL,
+    headers TEXT NOT NULL,
+    body TEXT NOT NULL
+  )
+`);
+
+const insertWebhookStmt = webhookDb.prepare(`
+  INSERT INTO received_webhooks (id, received_at, headers, body)
+  VALUES (@id, @received_at, @headers, @body)
+  ON CONFLICT(id) DO UPDATE SET
+    received_at = excluded.received_at,
+    headers = excluded.headers,
+    body = excluded.body
+`);
+
+const selectWebhooksStmt = webhookDb.prepare(`
+  SELECT id, received_at, headers, body
+  FROM received_webhooks
+  ORDER BY received_at DESC
+  LIMIT ?
+`);
+
+const trimWebhooksStmt = webhookDb.prepare(`
+  DELETE FROM received_webhooks
+  WHERE id NOT IN (
+    SELECT id FROM received_webhooks
+    ORDER BY received_at DESC
+    LIMIT ?
+  )
+`);
+
+const clearWebhooksStmt = webhookDb.prepare(
+  "DELETE FROM received_webhooks"
+);
+
+function persistReceivedWebhook({ id, receivedAt, headers, body }) {
+  insertWebhookStmt.run({
+    id,
+    received_at: receivedAt,
+    headers: JSON.stringify(headers ?? {}),
+    body: JSON.stringify(body ?? null),
+  });
+  trimWebhooksStmt.run(MAX_RECEIVED_WEBHOOKS);
+}
+
+function getStoredWebhooks(limit = MAX_RECEIVED_WEBHOOKS) {
+  return selectWebhooksStmt
+    .all(limit)
+    .map((row) => ({
+      id: row.id,
+      receivedAt: row.received_at,
+      headers: JSON.parse(row.headers),
+      body: JSON.parse(row.body),
+    }));
+}
+
+function clearStoredWebhooks() {
+  clearWebhooksStmt.run();
+}
+
+class BetterSqlite3Store extends session.Store {
+  constructor(db, { ttl = SESSION_MAX_AGE_MS } = {}) {
+    super();
+    this.db = db;
+    this.defaultTTL = ttl;
+    this.statements = {
+      cleanup: db.prepare(
+        "DELETE FROM sessions WHERE expired <= :now"
+      ),
+      get: db.prepare(
+        "SELECT sess, expired FROM sessions WHERE sid = :sid"
+      ),
+      set: db.prepare(`
+        INSERT INTO sessions (sid, sess, expired)
+        VALUES (:sid, :sess, :expired)
+        ON CONFLICT(sid) DO UPDATE SET
+          sess = excluded.sess,
+          expired = excluded.expired
+      `),
+      touch: db.prepare(
+        "UPDATE sessions SET expired = :expired WHERE sid = :sid"
+      ),
+      destroy: db.prepare(
+        "DELETE FROM sessions WHERE sid = :sid"
+      ),
+      length: db.prepare("SELECT COUNT(*) as count FROM sessions"),
+      clear: db.prepare("DELETE FROM sessions"),
+    };
+  }
+
+  cleanup() {
+    this.statements.cleanup.run({ now: Date.now() });
+  }
+
+  computeExpiry(sessionData) {
+    const cookie = sessionData?.cookie;
+    let ttl = this.defaultTTL;
+    if (cookie) {
+      if (cookie.expires) {
+        const expiresAt = new Date(cookie.expires).getTime();
+        if (!Number.isNaN(expiresAt)) {
+          ttl = expiresAt - Date.now();
+        }
+      } else if (cookie.maxAge) {
+        ttl = cookie.maxAge;
+      }
+    }
+    if (!Number.isFinite(ttl) || ttl <= 0) {
+      ttl = this.defaultTTL;
+    }
+    return Date.now() + ttl;
+  }
+
+  get(sid, callback = () => {}) {
+    try {
+      const row = this.statements.get.get({ sid });
+      if (!row) {
+        callback(null, null);
+        return;
+      }
+      if (row.expired <= Date.now()) {
+        this.statements.destroy.run({ sid });
+        callback(null, null);
+        return;
+      }
+      const sessionData = JSON.parse(row.sess);
+      callback(null, sessionData);
+    } catch (err) {
+      callback(err);
+    }
+  }
+
+  set(sid, sessionData, callback = () => {}) {
+    try {
+      const expired = this.computeExpiry(sessionData);
+      this.statements.set.run({
+        sid,
+        sess: JSON.stringify(sessionData),
+        expired,
+      });
+      this.cleanup();
+      callback(null);
+    } catch (err) {
+      callback(err);
+    }
+  }
+
+  destroy(sid, callback = () => {}) {
+    try {
+      this.statements.destroy.run({ sid });
+      callback(null);
+    } catch (err) {
+      callback(err);
+    }
+  }
+
+  touch(sid, sessionData, callback = () => {}) {
+    try {
+      const expired = this.computeExpiry(sessionData);
+      this.statements.touch.run({ sid, expired });
+      callback(null);
+    } catch (err) {
+      callback(err);
+    }
+  }
+
+  length(callback = () => {}) {
+    try {
+      const row = this.statements.length.get();
+      callback(null, row?.count ?? 0);
+    } catch (err) {
+      callback(err);
+    }
+  }
+
+  clear(callback = () => {}) {
+    try {
+      this.statements.clear.run();
+      callback(null);
+    } catch (err) {
+      callback(err);
+    }
+  }
+}
 
 // Respect the Render proxy so secure cookies are transmitted correctly.
 app.set("trust proxy", 1);
@@ -109,11 +314,7 @@ app.use(
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    store: new SQLiteStore({
-      db: path.basename(SESSION_DB_PATH),
-      dir: path.dirname(SESSION_DB_PATH),
-      concurrentDB: false,
-    }),
+    store: new BetterSqlite3Store(sessionDb),
     cookie: {
       maxAge: SESSION_MAX_AGE_MS,
       sameSite: "lax",
@@ -137,10 +338,7 @@ app.post("/webhooks", (req, res) => {
     body: req.body,
   };
   console.log("Received Rollout webhook:", payload);
-  receivedWebhooks.unshift(payload);
-  if (receivedWebhooks.length > MAX_RECEIVED_WEBHOOKS) {
-    receivedWebhooks.length = MAX_RECEIVED_WEBHOOKS;
-  }
+  persistReceivedWebhook(payload);
   res.status(204).end();
 });
 
@@ -473,11 +671,11 @@ app.delete("/api/webhooks/:id", async (req, res) => {
 });
 
 app.get("/api/received-webhooks", (_req, res) => {
-  res.json(receivedWebhooks);
+  res.json(getStoredWebhooks());
 });
 
 app.delete("/api/received-webhooks", (_req, res) => {
-  receivedWebhooks.length = 0;
+  clearStoredWebhooks();
   console.log("[Server] Cleared received webhook log");
   res.status(204).end();
 });
