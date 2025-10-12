@@ -38,15 +38,18 @@ This produces the production React build in `client/dist`. When present, Express
 3. **Set environment variables** in Render’s dashboard:
    - `ROLLOUT_CLIENT_ID`, `ROLLOUT_CLIENT_SECRET`
    - `ROLLOUT_CONSUMER_KEY` (optional, defaults to `demo-consumer`)
+   - `VITE_ROLLOUT_CONSUMER_KEY` (optional, seeds the UI’s consumer key field; defaults to `demo-consumer`)
    - `ROLLOUT_API_BASE`, `ROLLOUT_CRM_API_BASE` (defaults provided)
    - `DEFAULT_WEBHOOK_TARGET`
    - `ALLOWED_ORIGINS` (include your Render URL, e.g. `https://your-app.onrender.com`)
    - `SESSION_SECRET` (use a long random string)
-   - Optional: `SESSION_MAX_AGE_MS`, `MAX_RECEIVED_WEBHOOKS`, `ROLLOUT_TOKEN_TTL_SECS`
+   - Optional: `SESSION_DB_PATH` (defaults to `./session-data/sessions.sqlite`), `SESSION_MAX_AGE_MS`, `MAX_RECEIVED_WEBHOOKS`, `ROLLOUT_TOKEN_TTL_SECS`
 4. **Deploy**. Render will install dependencies, build the client, and run `npm start`.
 5. **Verify** by visiting the Render URL (for example, `https://your-app.onrender.com`) and testing credential listing, webhook subscription, and the webhook log UI.
 
 > ℹ️ A `render.yaml` file is included if you prefer infrastructure-as-code. Adjust the service name, region, and env vars as needed.
+
+Sessions persist between restarts via a local SQLite database stored under `session-data/`. Render’s free plan retains this file on disk even when the service sleeps, so consumer-key overrides and other session state survive restarts without any external datastore.
 
 ## Webhook Tunnel (Local Testing)
 

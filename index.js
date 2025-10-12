@@ -20,13 +20,43 @@ const DEFAULT_CONSUMER_KEY =
 const TOKEN_TTL_SECS =
   Number(process.env.ROLLOUT_TOKEN_TTL_SECS) || 60 * 60;
 const DEFAULT_WEBHOOK_TARGET =
-  process.env.DEFAULT_WEBHOOK_TARGET || "http://localhost:5174/webhooks";
+  process.env.DEFAULT_WEBHOOK_TARGET ||
+  "https://rollout-webhooks-demo.onrender.com/webhooks";
 const MAX_RECEIVED_WEBHOOKS =
   Number(process.env.MAX_RECEIVED_WEBHOOKS) || 100;
 const SESSION_SECRET = process.env.SESSION_SECRET || "rollout-demo-secret";
 const SESSION_MAX_AGE_MS =
   Number(process.env.SESSION_MAX_AGE_MS) || 1000 * 60 * 60 * 6;
+const SESSION_DB_PATH =
+  process.env.SESSION_DB_PATH ||
+  path.join(__dirname, "session-data", "sessions.sqlite");
 const receivedWebhooks = [];
+
+function sanitizeConsumerKey(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function resolveConsumerKey(req, provided) {
+  const override = sanitizeConsumerKey(provided);
+  if (override) {
+    return override;
+  }
+  const sessionKey = sanitizeConsumerKey(req.session?.consumerKey);
+  if (sessionKey) {
+    return sessionKey;
+  }
+  return DEFAULT_CONSUMER_KEY;
+}
+
+if (!fs.existsSync(path.dirname(SESSION_DB_PATH))) {
+  fs.mkdirSync(path.dirname(SESSION_DB_PATH), { recursive: true });
+}
+
+const SQLiteStore = require("connect-sqlite3")(session);
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ||
   "http://localhost:5173")
@@ -57,6 +87,11 @@ app.use(
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
+    store: new SQLiteStore({
+      db: path.basename(SESSION_DB_PATH),
+      dir: path.dirname(SESSION_DB_PATH),
+      concurrentDB: false,
+    }),
     cookie: {
       maxAge: SESSION_MAX_AGE_MS,
       sameSite: "lax",
@@ -123,7 +158,7 @@ app.get("/healthz", (_req, res) => {
 
 app.get("/rollout-token", (req, res) => {
   try {
-    const consumerKey = req.query.consumerKey || DEFAULT_CONSUMER_KEY;
+    const consumerKey = resolveConsumerKey(req, req.query.consumerKey);
     const token = createRolloutToken(consumerKey);
     const nowSecs = Math.round(Date.now() / 1000);
     const exp = nowSecs + TOKEN_TTL_SECS;
@@ -143,7 +178,8 @@ async function callRolloutApi({
   consumerKey,
   headers,
 }) {
-  const token = createRolloutToken(consumerKey);
+  const resolvedConsumerKey = sanitizeConsumerKey(consumerKey) || DEFAULT_CONSUMER_KEY;
+  const token = createRolloutToken(resolvedConsumerKey);
   const sanitizedPath = path.startsWith("/") ? path.slice(1) : path;
   const normalizedBase = baseUrl.endsWith("/")
     ? baseUrl
@@ -203,7 +239,7 @@ app.get("/api/credentials", async (req, res) => {
         includeProfile: "true",
         includeData: "true",
       },
-      consumerKey: req.query.consumerKey || DEFAULT_CONSUMER_KEY,
+      consumerKey: resolveConsumerKey(req, req.query.consumerKey),
     });
     console.log(
       `[Server] Retrieved ${Array.isArray(data) ? data.length : "unknown"} credentials`
@@ -238,7 +274,7 @@ app.get("/api/webhooks", async (req, res) => {
         limit,
         next,
       },
-      consumerKey: req.query.consumerKey || DEFAULT_CONSUMER_KEY,
+      consumerKey: resolveConsumerKey(req, req.query.consumerKey),
       headers: {
         "x-rollout-credential-id": credentialId,
       },
@@ -286,7 +322,7 @@ app.post("/api/webhooks", async (req, res) => {
         event,
         filters: filters && typeof filters === "object" ? filters : {},
       },
-      consumerKey: consumerKey || DEFAULT_CONSUMER_KEY,
+      consumerKey: resolveConsumerKey(req, consumerKey),
       headers: {
         "x-rollout-credential-id": credentialId,
       },
@@ -299,6 +335,40 @@ app.post("/api/webhooks", async (req, res) => {
       .status(status)
       .json({ error: "Failed to create webhook", details: err.body });
   }
+});
+
+app.get("/api/session/consumer-key", (req, res) => {
+  const stored = sanitizeConsumerKey(req.session.consumerKey);
+  res.json({
+    consumerKey: stored || "",
+    effectiveConsumerKey: stored || DEFAULT_CONSUMER_KEY,
+  });
+});
+
+app.post("/api/session/consumer-key", (req, res) => {
+  const { consumerKey } = req.body || {};
+  if (
+    consumerKey !== undefined &&
+    consumerKey !== null &&
+    typeof consumerKey !== "string"
+  ) {
+    res
+      .status(400)
+      .json({ error: "consumerKey must be a string, null, or undefined" });
+    return;
+  }
+
+  const sanitized = sanitizeConsumerKey(consumerKey);
+  if (sanitized) {
+    req.session.consumerKey = sanitized;
+  } else {
+    delete req.session.consumerKey;
+  }
+
+  res.json({
+    consumerKey: sanitized || "",
+    effectiveConsumerKey: resolveConsumerKey(req),
+  });
 });
 
 app.get("/api/session/webhook-target", (req, res) => {
@@ -341,7 +411,7 @@ app.delete("/api/webhooks/:id", async (req, res) => {
       baseUrl: ROLLOUT_CRM_API_BASE,
       path: `/webhooks/${id}`,
       method: "DELETE",
-      consumerKey: consumerKey || DEFAULT_CONSUMER_KEY,
+      consumerKey: resolveConsumerKey(req, consumerKey),
       headers: {
         "x-rollout-credential-id": credentialId,
       },

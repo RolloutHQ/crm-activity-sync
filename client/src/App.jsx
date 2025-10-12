@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   RolloutLinkProvider,
   CredentialsManager,
@@ -17,21 +17,11 @@ const SUBSCRIPTION_EVENTS = [
 ];
 
 const defaultWebhookUrl =
-  import.meta.env.VITE_DEFAULT_WEBHOOK_URL || "http://localhost:5174/webhooks";
+  import.meta.env.VITE_DEFAULT_WEBHOOK_URL ||
+  "https://rollout-webhooks-demo.onrender.com/webhooks";
 
-function fetchRolloutToken() {
-  return fetch(rolloutTokenEndpoint, {
-    method: "GET",
-    credentials: "omit",
-  })
-    .then((resp) => {
-      if (!resp.ok) {
-        throw new Error(`Failed to fetch token (${resp.status})`);
-      }
-      return resp.json();
-    })
-    .then((data) => data.token);
-}
+const defaultConsumerKey =
+  import.meta.env.VITE_ROLLOUT_CONSUMER_KEY || "demo-consumer";
 
 async function fetchJson(path, options) {
   const response = await fetch(path, {
@@ -82,6 +72,12 @@ export default function App() {
   const [credentials, setCredentials] = useState([]);
   const [credentialsLoading, setCredentialsLoading] = useState(false);
   const [credentialsError, setCredentialsError] = useState(null);
+  const [consumerKey, setConsumerKey] = useState(defaultConsumerKey);
+  const [consumerKeyStatus, setConsumerKeyStatus] = useState("");
+  const [consumerKeyError, setConsumerKeyError] = useState(null);
+  const [hasLoadedConsumerKey, setHasLoadedConsumerKey] = useState(false);
+  const [savingConsumerKey, setSavingConsumerKey] = useState(false);
+  const persistedConsumerKey = useRef(null);
   const [webhooks, setWebhooks] = useState([]);
   const [webhooksLoading, setWebhooksLoading] = useState(false);
   const [webhooksError, setWebhooksError] = useState(null);
@@ -101,6 +97,93 @@ export default function App() {
   const [webhookTargetError, setWebhookTargetError] = useState(null);
   const [hasLoadedWebhookTarget, setHasLoadedWebhookTarget] = useState(false);
   const [savingWebhookTarget, setSavingWebhookTarget] = useState(false);
+
+  const buildApiUrl = useCallback(
+    (path, params = {}) => {
+      const origin =
+        typeof window !== "undefined" ? window.location.origin : "http://localhost";
+      const url = new URL(path, origin);
+      for (const [key, value] of Object.entries(params)) {
+        if (value !== undefined && value !== null && value !== "") {
+          url.searchParams.set(key, value);
+        }
+      }
+      const normalizedConsumerKey =
+        typeof consumerKey === "string" ? consumerKey.trim() : "";
+      if (normalizedConsumerKey) {
+        url.searchParams.set("consumerKey", normalizedConsumerKey);
+      }
+      return url.toString();
+    },
+    [consumerKey]
+  );
+
+  const fetchRolloutToken = useCallback(() => {
+    const origin =
+      typeof window !== "undefined" ? window.location.origin : "http://localhost";
+    const url =
+      rolloutTokenEndpoint.startsWith("http://") ||
+      rolloutTokenEndpoint.startsWith("https://")
+        ? new URL(rolloutTokenEndpoint)
+        : new URL(rolloutTokenEndpoint, origin);
+    const normalizedConsumerKey =
+      typeof consumerKey === "string" ? consumerKey.trim() : "";
+    if (normalizedConsumerKey) {
+      url.searchParams.set("consumerKey", normalizedConsumerKey);
+    }
+    return fetch(url.toString(), {
+      method: "GET",
+      credentials: "omit",
+    })
+      .then((resp) => {
+        if (!resp.ok) {
+          throw new Error(`Failed to fetch token (${resp.status})`);
+        }
+        return resp.json();
+      })
+      .then((data) => data.token);
+  }, [consumerKey, rolloutTokenEndpoint]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await fetchJson("/api/session/consumer-key");
+        if (cancelled) {
+          return;
+        }
+        const stored =
+          data && typeof data.consumerKey === "string" && data.consumerKey.length > 0
+            ? data.consumerKey
+            : null;
+        if (stored) {
+          const trimmed = stored.trim();
+          persistedConsumerKey.current = trimmed;
+          setConsumerKey(trimmed);
+        } else {
+          persistedConsumerKey.current = null;
+          setConsumerKey(defaultConsumerKey);
+        }
+        setConsumerKeyError(null);
+        setConsumerKeyStatus("");
+      } catch (err) {
+        if (cancelled) {
+          return;
+        }
+        persistedConsumerKey.current = null;
+        setConsumerKeyError(err.message);
+        setConsumerKey(defaultConsumerKey);
+        setConsumerKeyStatus("");
+      } finally {
+        if (!cancelled) {
+          setHasLoadedConsumerKey(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [defaultConsumerKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -171,18 +254,77 @@ export default function App() {
     };
   }, [webhookUrl, hasLoadedWebhookTarget]);
 
+  useEffect(() => {
+    if (!hasLoadedConsumerKey) {
+      return;
+    }
+
+    const normalizedConsumerKey =
+      typeof consumerKey === "string" ? consumerKey.trim() : "";
+    const persisted = persistedConsumerKey.current;
+    const trimmedDefault = defaultConsumerKey.trim();
+
+    if (normalizedConsumerKey.length === 0) {
+      if (persisted === null) {
+        return;
+      }
+    } else if (persisted === normalizedConsumerKey) {
+      return;
+    } else if (persisted === null && normalizedConsumerKey === trimmedDefault) {
+      return;
+    }
+
+    let cancelled = false;
+    const handle = setTimeout(async () => {
+      if (cancelled) {
+        return;
+      }
+      setSavingConsumerKey(true);
+      setConsumerKeyError(null);
+      setConsumerKeyStatus("");
+      try {
+        await fetchJson("/api/session/consumer-key", {
+          method: "POST",
+          body: JSON.stringify({
+            consumerKey:
+              normalizedConsumerKey.length > 0 ? normalizedConsumerKey : null,
+          }),
+        });
+        if (!cancelled) {
+          persistedConsumerKey.current =
+            normalizedConsumerKey.length > 0 ? normalizedConsumerKey : null;
+          setConsumerKeyStatus("Consumer key saved for this session.");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setConsumerKeyError(err.message);
+        }
+      } finally {
+        if (!cancelled) {
+          setSavingConsumerKey(false);
+        }
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [consumerKey, hasLoadedConsumerKey, defaultConsumerKey]);
+
   const refreshCredentials = useCallback(async () => {
+    const url = buildApiUrl("/api/credentials");
     setCredentialsLoading(true);
     setCredentialsError(null);
     try {
-      const data = await fetchJson("/api/credentials");
+      const data = await fetchJson(url);
       setCredentials(extractItems(data));
     } catch (err) {
       setCredentialsError(err.message);
     } finally {
       setCredentialsLoading(false);
     }
-  }, []);
+  }, [buildApiUrl]);
 
   const refreshWebhooks = useCallback(
     async (credentialIdOverride) => {
@@ -196,9 +338,7 @@ export default function App() {
       setWebhooksError(null);
       try {
         const data = await fetchJson(
-          `/api/webhooks?credentialId=${encodeURIComponent(
-            credentialIdToUse
-          )}`
+          buildApiUrl("/api/webhooks", { credentialId: credentialIdToUse })
         );
         setWebhooks(extractItems(data));
       } catch (err) {
@@ -207,12 +347,18 @@ export default function App() {
         setWebhooksLoading(false);
       }
     },
-    [selectedCredentialId]
+    [selectedCredentialId, buildApiUrl]
   );
 
   useEffect(() => {
     refreshCredentials();
   }, [refreshCredentials]);
+
+  useEffect(() => {
+    setSelectedCredentialId("");
+    setCredentials([]);
+    setWebhooks([]);
+  }, [consumerKey]);
 
   useEffect(() => {
     if (!selectedCredentialId && credentials.length > 0) {
@@ -299,6 +445,10 @@ export default function App() {
             url: webhookUrl,
             event: eventId,
             credentialId: credential.id,
+            consumerKey:
+              typeof consumerKey === "string" && consumerKey.trim().length > 0
+                ? consumerKey.trim()
+                : undefined,
           }),
         });
 
@@ -312,7 +462,7 @@ export default function App() {
         setSubscriptionTarget(null);
       }
     },
-    [refreshWebhooks, webhookUrl]
+    [refreshWebhooks, webhookUrl, consumerKey]
   );
 
   const deleteWebhook = useCallback(
@@ -330,9 +480,9 @@ export default function App() {
       setWebhookDeletionError(null);
       try {
         await fetchJson(
-          `/api/webhooks/${encodeURIComponent(webhook.id)}?credentialId=${encodeURIComponent(
-            selectedCredentialId
-          )}`,
+          buildApiUrl(`/api/webhooks/${encodeURIComponent(webhook.id)}`, {
+            credentialId: selectedCredentialId,
+          }),
           { method: "DELETE" }
         );
         await refreshWebhooks(selectedCredentialId);
@@ -342,7 +492,7 @@ export default function App() {
         setDeletingWebhookId(null);
       }
     },
-    [refreshWebhooks, selectedCredentialId]
+    [refreshWebhooks, selectedCredentialId, buildApiUrl]
   );
 
   return (
@@ -353,6 +503,31 @@ export default function App() {
           Use the embedded Rollout Link to connect providers, view existing
           credentials, and subscribe to webhook events.
         </p>
+        <div className="consumer-key-controls">
+          <label htmlFor="consumer-key-input">Rollout consumer key</label>
+          <input
+            id="consumer-key-input"
+            type="text"
+            value={consumerKey}
+            onChange={(event) => setConsumerKey(event.target.value)}
+            placeholder="Enter a Rollout consumer key"
+          />
+          <p className="hint">
+            Used when requesting tokens and talking to the Rollout APIs.
+          </p>
+          {hasLoadedConsumerKey && savingConsumerKey && (
+            <p className="hint">Saving consumer key for this session…</p>
+          )}
+          {hasLoadedConsumerKey && consumerKeyError && (
+            <p className="error">
+              Error saving consumer key: {consumerKeyError}
+            </p>
+          )}
+          {hasLoadedConsumerKey &&
+            !savingConsumerKey &&
+            !consumerKeyError &&
+            consumerKeyStatus && <p className="success">{consumerKeyStatus}</p>}
+        </div>
       </header>
       <main>
         <section className="card">
@@ -397,14 +572,6 @@ export default function App() {
                   <div>
                     <dt>App</dt>
                     <dd>{credential.appKey}</dd>
-                  </div>
-                  <div>
-                    <dt>Last Sync</dt>
-                    <dd>{credential.data?.lastSyncAt || "—"}</dd>
-                  </div>
-                  <div>
-                    <dt>Status</dt>
-                    <dd>{credential.status || "Unknown"}</dd>
                   </div>
                 </dl>
 
