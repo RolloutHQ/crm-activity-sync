@@ -131,6 +131,27 @@ function AccordionSection({ id, title, isOpen, onToggle, headerActions, children
 }
 
 export default function App() {
+  const [clientCredentialsConfigured, setClientCredentialsConfigured] =
+    useState(false);
+  const [clientCredentialsLoading, setClientCredentialsLoading] =
+    useState(true);
+  const [clientCredentialsLoadError, setClientCredentialsLoadError] =
+    useState(null);
+  const [clientCredentialsFormError, setClientCredentialsFormError] =
+    useState(null);
+  const [clientCredentialsStatus, setClientCredentialsStatus] = useState("");
+  const [clientCredentialFormClientId, setClientCredentialFormClientId] =
+    useState("");
+  const [clientCredentialFormClientSecret, setClientCredentialFormClientSecret] =
+    useState("");
+  const [isEditingClientCredentials, setIsEditingClientCredentials] =
+    useState(false);
+  const [isSavingClientCredentials, setIsSavingClientCredentials] =
+    useState(false);
+  const [isClearingClientCredentials, setIsClearingClientCredentials] =
+    useState(false);
+  const storedClientIdRef = useRef("");
+  const defaultClientIdRef = useRef("");
   const [credentials, setCredentials] = useState([]);
   const [credentialsLoading, setCredentialsLoading] = useState(false);
   const [credentialsError, setCredentialsError] = useState(null);
@@ -174,6 +195,22 @@ export default function App() {
   const [hasLoadedWebhookTarget, setHasLoadedWebhookTarget] = useState(false);
   const [savingWebhookTarget, setSavingWebhookTarget] = useState(false);
 
+  const resetStateForClientCredentialsChange = useCallback(() => {
+    credentialsRequestIdRef.current += 1;
+    webhooksRequestIdRef.current += 1;
+    setCredentials([]);
+    setCredentialsLoading(false);
+    setCredentialsError(null);
+    setWebhooks([]);
+    setWebhooksLoading(false);
+    setWebhooksError(null);
+    setSelectedCredentialId("");
+    setSubscriptionError(null);
+    setLastSubscriptionMessage("");
+    setWebhookDeletionError(null);
+    setDeletingWebhookId(null);
+  }, []);
+
   const buildApiUrl = useCallback(
     (path, params = {}) => {
       const origin =
@@ -195,11 +232,69 @@ export default function App() {
   );
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setClientCredentialsLoading(true);
+      setClientCredentialsLoadError(null);
+      try {
+        const data = await fetchJson("/api/session/rollout-client");
+        if (cancelled) {
+          return;
+        }
+        const configured = Boolean(data?.configured);
+        const storedClientId =
+          data && typeof data.clientId === "string" ? data.clientId : "";
+        const defaultClientId =
+          data && typeof data.defaultClientId === "string"
+            ? data.defaultClientId
+            : "";
+        storedClientIdRef.current = storedClientId;
+        defaultClientIdRef.current = defaultClientId;
+        setClientCredentialFormClientId(
+          configured && storedClientId ? storedClientId : defaultClientId
+        );
+        setClientCredentialFormClientSecret("");
+        setClientCredentialsConfigured(configured);
+        setIsEditingClientCredentials(!configured);
+        setClientCredentialsFormError(null);
+        setClientCredentialsStatus("");
+      } catch (err) {
+        if (cancelled) {
+          return;
+        }
+        storedClientIdRef.current = "";
+        defaultClientIdRef.current = "";
+        setClientCredentialsConfigured(false);
+        setIsEditingClientCredentials(true);
+        setClientCredentialFormClientId("");
+        setClientCredentialFormClientSecret("");
+        setClientCredentialsLoadError(err.message);
+        setClientCredentialsFormError(null);
+        setClientCredentialsStatus("");
+      } finally {
+        if (!cancelled) {
+          setClientCredentialsLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     latestConsumerKeyRef.current =
       typeof consumerKey === "string" ? consumerKey.trim() : "";
   }, [consumerKey]);
 
   const fetchRolloutToken = useCallback(() => {
+    if (!clientCredentialsConfigured) {
+      return Promise.reject(
+        new Error(
+          "Rollout client credentials are not configured for this session."
+        )
+      );
+    }
     const origin =
       typeof window !== "undefined" ? window.location.origin : "http://localhost";
     const url =
@@ -214,7 +309,7 @@ export default function App() {
     }
     return fetch(url.toString(), {
       method: "GET",
-      credentials: "omit",
+      credentials: "same-origin",
     })
       .then((resp) => {
         if (!resp.ok) {
@@ -223,7 +318,201 @@ export default function App() {
         return resp.json();
       })
       .then((data) => data.token);
-  }, [consumerKey, rolloutTokenEndpoint]);
+  }, [clientCredentialsConfigured, consumerKey, rolloutTokenEndpoint]);
+
+  const handleClientCredentialsSubmit = async (event) => {
+    event.preventDefault();
+    if (isSavingClientCredentials || isClearingClientCredentials) {
+      return;
+    }
+    const trimmedClientId = clientCredentialFormClientId.trim();
+    const trimmedClientSecret = clientCredentialFormClientSecret.trim();
+    if (!trimmedClientId || !trimmedClientSecret) {
+      setClientCredentialsFormError(
+        "Both client ID and client secret are required."
+      );
+      return;
+    }
+    setClientCredentialsFormError(null);
+    setClientCredentialsStatus("");
+    setIsSavingClientCredentials(true);
+    try {
+      const response = await fetchJson("/api/session/rollout-client", {
+        method: "POST",
+        body: JSON.stringify({
+          clientId: trimmedClientId,
+          clientSecret: trimmedClientSecret,
+        }),
+      });
+      const storedId =
+        response && typeof response.clientId === "string"
+          ? response.clientId
+          : trimmedClientId;
+      storedClientIdRef.current = storedId;
+      setClientCredentialFormClientId(storedId);
+      setClientCredentialFormClientSecret("");
+      setClientCredentialsConfigured(true);
+      setIsEditingClientCredentials(false);
+      setClientCredentialsLoadError(null);
+      setClientCredentialsStatus(
+        "Rollout client credentials saved for this session."
+      );
+      resetStateForClientCredentialsChange();
+    } catch (err) {
+      setClientCredentialsFormError(err.message);
+    } finally {
+      setIsSavingClientCredentials(false);
+    }
+  };
+
+  const handleClearClientCredentials = async () => {
+    if (isClearingClientCredentials || isSavingClientCredentials) {
+      return;
+    }
+    setClientCredentialsFormError(null);
+    setClientCredentialsStatus("");
+    setIsClearingClientCredentials(true);
+    try {
+      const response = await fetch("/api/session/rollout-client", {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `Failed to clear credentials (${response.status})${
+            errorText ? `: ${errorText}` : ""
+          }`
+        );
+      }
+      storedClientIdRef.current = "";
+      setClientCredentialFormClientSecret("");
+      setClientCredentialsConfigured(false);
+      setIsEditingClientCredentials(true);
+      setClientCredentialFormClientId(
+        defaultClientIdRef.current ? defaultClientIdRef.current : ""
+      );
+      setClientCredentialsLoadError(null);
+      setClientCredentialsStatus(
+        "Rollout client credentials cleared for this session."
+      );
+      resetStateForClientCredentialsChange();
+    } catch (err) {
+      setClientCredentialsFormError(err.message);
+    } finally {
+      setIsClearingClientCredentials(false);
+    }
+  };
+
+  const handleCancelClientCredentialsEdit = () => {
+    if (!clientCredentialsConfigured) {
+      return;
+    }
+    setClientCredentialsFormError(null);
+    setClientCredentialsStatus("");
+    setClientCredentialFormClientId(
+      storedClientIdRef.current || defaultClientIdRef.current || ""
+    );
+    setClientCredentialFormClientSecret("");
+    setIsEditingClientCredentials(false);
+  };
+
+  const handleOpenClientCredentialsEditor = () => {
+    setClientCredentialsFormError(null);
+    setClientCredentialsStatus("");
+    setClientCredentialFormClientId(
+      storedClientIdRef.current || defaultClientIdRef.current || ""
+    );
+    setClientCredentialFormClientSecret("");
+    setIsEditingClientCredentials(true);
+  };
+
+  const renderClientCredentialsForm = ({
+    showCancel = false,
+    showClear = false,
+    showStatusInForm = true,
+  } = {}) => (
+    <form
+      className="client-credentials-form"
+      onSubmit={handleClientCredentialsSubmit}
+    >
+      <label htmlFor="rollout-client-id-input">Rollout client ID</label>
+      <input
+        id="rollout-client-id-input"
+        type="text"
+        value={clientCredentialFormClientId}
+        onChange={(event) => {
+          setClientCredentialFormClientId(event.target.value);
+          if (clientCredentialsFormError) {
+            setClientCredentialsFormError(null);
+          }
+          if (clientCredentialsStatus) {
+            setClientCredentialsStatus("");
+          }
+        }}
+        placeholder="Enter a Rollout client ID"
+        autoComplete="off"
+        required
+      />
+      <label htmlFor="rollout-client-secret-input">Rollout client secret</label>
+      <input
+        id="rollout-client-secret-input"
+        type="password"
+        value={clientCredentialFormClientSecret}
+        onChange={(event) => {
+          setClientCredentialFormClientSecret(event.target.value);
+          if (clientCredentialsFormError) {
+            setClientCredentialsFormError(null);
+          }
+          if (clientCredentialsStatus) {
+            setClientCredentialsStatus("");
+          }
+        }}
+        placeholder="Enter the client secret"
+        autoComplete="off"
+        required
+      />
+      <p className="hint">
+        Stored only for this browser session. Clear the session to remove it.
+      </p>
+      {clientCredentialsFormError ? (
+        <p className="error">
+          Error saving client credentials: {clientCredentialsFormError}
+        </p>
+      ) : null}
+      {!clientCredentialsFormError &&
+      clientCredentialsStatus &&
+      showStatusInForm ? (
+        <p className="success">{clientCredentialsStatus}</p>
+      ) : null}
+      <div className="client-credentials-actions">
+        <button
+          type="submit"
+          disabled={isSavingClientCredentials || isClearingClientCredentials}
+        >
+          {isSavingClientCredentials ? "Saving…" : "Save client credentials"}
+        </button>
+        {showClear ? (
+          <button
+            type="button"
+            onClick={handleClearClientCredentials}
+            disabled={isSavingClientCredentials || isClearingClientCredentials}
+          >
+            {isClearingClientCredentials ? "Clearing…" : "Clear stored credentials"}
+          </button>
+        ) : null}
+        {showCancel ? (
+          <button
+            type="button"
+            onClick={handleCancelClientCredentialsEdit}
+            disabled={isSavingClientCredentials || isClearingClientCredentials}
+          >
+            Cancel
+          </button>
+        ) : null}
+      </div>
+    </form>
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -693,14 +982,63 @@ export default function App() {
     return normalized.length > 0 ? normalized : "default-consumer-key";
   }, [consumerKey, hasLoadedConsumerKey]);
 
+  const storedClientId = storedClientIdRef.current;
+
+  if (clientCredentialsLoading) {
+    return (
+      <div className="app credentials-setup">
+        <section className="card credentials-card">
+          <h1>Rollout Webhooks Demo</h1>
+          <p className="hint">
+            Loading session-specific Rollout client credentials…
+          </p>
+        </section>
+      </div>
+    );
+  }
+
+  if (!clientCredentialsConfigured) {
+    return (
+      <div className="app credentials-setup">
+        <section className="card credentials-card">
+          <h1>Rollout Webhooks Demo</h1>
+          <p>
+            Enter your Rollout client ID and client secret to continue. The
+            values are stored only for this browser session.
+          </p>
+          {clientCredentialsLoadError ? (
+            <p className="error">
+              Failed to load stored credentials: {clientCredentialsLoadError}
+            </p>
+          ) : null}
+          {renderClientCredentialsForm()}
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <header>
-        <h1>Rollout Webhooks Demo</h1>
+        <div className="header-top">
+          <h1>Rollout Webhooks Demo</h1>
+          <div className="header-actions">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={handleOpenClientCredentialsEditor}
+            >
+              Rollout API Keys
+            </button>
+          </div>
+        </div>
         <p>
           Use the embedded Rollout Link to connect providers, view existing
           credentials, and subscribe to webhook events.
         </p>
+        {clientCredentialsStatus && !isEditingClientCredentials ? (
+          <p className="success inline-status">{clientCredentialsStatus}</p>
+        ) : null}
         <div className="consumer-key-controls">
           <label htmlFor="consumer-key-input">Rollout consumer key</label>
           <input
@@ -1001,6 +1339,50 @@ export default function App() {
           </ul>
         </AccordionSection>
       </main>
+      {isEditingClientCredentials ? (
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="client-credentials-modal-title"
+          onClick={handleCancelClientCredentialsEdit}
+        >
+          <div
+            className="modal"
+            onClick={(event) => {
+              event.stopPropagation();
+            }}
+          >
+            <header className="modal-header">
+              <h2 id="client-credentials-modal-title">Rollout API Keys</h2>
+              <button
+                type="button"
+                className="modal-close"
+                onClick={handleCancelClientCredentialsEdit}
+                aria-label="Close Rollout API Keys editor"
+              >
+                ×
+              </button>
+            </header>
+            <div className="modal-body">
+              <p className="hint">
+                Stored only for this browser session. Update or clear them here.
+              </p>
+              <dl className="client-credentials-summary">
+                <div>
+                  <dt>Current client ID</dt>
+                  <dd>{storedClientId || "Not configured"}</dd>
+                </div>
+              </dl>
+              {renderClientCredentialsForm({
+                showCancel: true,
+                showClear: true,
+                showStatusInForm: false,
+              })}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -14,8 +14,8 @@ const ROLLOUT_API_BASE =
   process.env.ROLLOUT_API_BASE || "https://universal.rollout.com/api";
 const ROLLOUT_CRM_API_BASE =
   process.env.ROLLOUT_CRM_API_BASE || "https://crm.universal.rollout.com/api";
-const ROLLOUT_CLIENT_ID = process.env.ROLLOUT_CLIENT_ID;
-const ROLLOUT_CLIENT_SECRET = process.env.ROLLOUT_CLIENT_SECRET;
+const DEFAULT_ROLLOUT_CLIENT_ID =
+  (process.env.ROLLOUT_CLIENT_ID || "").trim();
 const DEFAULT_CONSUMER_KEY =
   process.env.ROLLOUT_CONSUMER_KEY || "demo-consumer";
 const DEFAULT_ACCORDION_STATE = {
@@ -75,6 +75,47 @@ function normalizeAccordionState(value) {
     }
   }
   return normalized;
+}
+
+function sanitizeClientId(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function sanitizeClientSecret(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function getSessionRolloutClientCredentials(req) {
+  const stored = req.session?.rolloutClientCredentials;
+  if (!stored || typeof stored !== "object") {
+    return null;
+  }
+  const clientId = sanitizeClientId(stored.clientId);
+  const clientSecret = sanitizeClientSecret(stored.clientSecret);
+  if (!clientId || !clientSecret) {
+    return null;
+  }
+  return { clientId, clientSecret };
+}
+
+function requireRolloutClientCredentials(req) {
+  const credentials = getSessionRolloutClientCredentials(req);
+  if (!credentials) {
+    const error = new Error(
+      "Rollout client credentials are not configured for this session"
+    );
+    error.status = 401;
+    throw error;
+  }
+  return credentials;
 }
 
 const dataDir = path.dirname(SESSION_DB_PATH);
@@ -342,33 +383,24 @@ app.post("/webhooks", (req, res) => {
   res.status(204).end();
 });
 
-function createRolloutToken(consumerKey = DEFAULT_CONSUMER_KEY) {
-  if (!ROLLOUT_CLIENT_ID || !ROLLOUT_CLIENT_SECRET) {
-    throw new Error("Rollout client credentials not configured");
-  }
-
+function createRolloutToken(req, consumerKey = DEFAULT_CONSUMER_KEY) {
   if (!consumerKey) {
     throw new Error("Missing consumer key");
   }
 
+  const { clientId, clientSecret } = requireRolloutClientCredentials(req);
   const nowSecs = Math.round(Date.now() / 1000);
   const exp = nowSecs + TOKEN_TTL_SECS;
 
   return jwt.sign(
     {
-      iss: ROLLOUT_CLIENT_ID,
+      iss: clientId,
       sub: consumerKey,
       iat: nowSecs,
       exp,
     },
-    ROLLOUT_CLIENT_SECRET,
+    clientSecret,
     { algorithm: "HS512" }
-  );
-}
-
-if (!ROLLOUT_CLIENT_ID || !ROLLOUT_CLIENT_SECRET) {
-  console.warn(
-    "Missing Rollout client credentials; /rollout-token will return 500 until they are configured."
   );
 }
 
@@ -379,27 +411,35 @@ app.get("/healthz", (_req, res) => {
 app.get("/rollout-token", (req, res) => {
   try {
     const consumerKey = resolveConsumerKey(req, req.query.consumerKey);
-    const token = createRolloutToken(consumerKey);
+    const token = createRolloutToken(req, consumerKey);
     const nowSecs = Math.round(Date.now() / 1000);
     const exp = nowSecs + TOKEN_TTL_SECS;
     res.json({ token, expiresAt: exp });
   } catch (err) {
     console.error("Error generating Rollout token", err);
-    res.status(500).json({ error: "Unexpected error generating Rollout token" });
+    const status = err.status || 500;
+    const message =
+      status === 401
+        ? err.message
+        : "Unexpected error generating Rollout token";
+    res.status(status).json({ error: message });
   }
 });
 
-async function callRolloutApi({
-  baseUrl,
-  path,
-  method = "GET",
-  searchParams,
-  body,
-  consumerKey,
-  headers,
-}) {
+async function callRolloutApi(
+  req,
+  {
+    baseUrl,
+    path,
+    method = "GET",
+    searchParams,
+    body,
+    consumerKey,
+    headers,
+  }
+) {
   const resolvedConsumerKey = sanitizeConsumerKey(consumerKey) || DEFAULT_CONSUMER_KEY;
-  const token = createRolloutToken(resolvedConsumerKey);
+  const token = createRolloutToken(req, resolvedConsumerKey);
   const sanitizedPath = path.startsWith("/") ? path.slice(1) : path;
   const normalizedBase = baseUrl.endsWith("/")
     ? baseUrl
@@ -452,7 +492,7 @@ async function callRolloutApi({
 
 app.get("/api/credentials", async (req, res) => {
   try {
-    const data = await callRolloutApi({
+    const data = await callRolloutApi(req, {
       baseUrl: ROLLOUT_API_BASE,
       path: "/credentials",
       searchParams: {
@@ -475,7 +515,11 @@ app.get("/api/credentials", async (req, res) => {
     const status = err.status || 500;
     res
       .status(status)
-      .json({ error: "Failed to fetch credentials", details: err.body });
+      .json({
+        error: "Failed to fetch credentials",
+        details: err.body,
+        message: err.message,
+      });
   }
 });
 
@@ -486,7 +530,7 @@ app.get("/api/webhooks", async (req, res) => {
       res.status(400).json({ error: "credentialId query parameter is required" });
       return;
     }
-    const data = await callRolloutApi({
+    const data = await callRolloutApi(req, {
       baseUrl: ROLLOUT_CRM_API_BASE,
       path: "/webhooks",
       searchParams: {
@@ -513,7 +557,11 @@ app.get("/api/webhooks", async (req, res) => {
     const status = err.status || 500;
     res
       .status(status)
-      .json({ error: "Failed to fetch webhooks", details: err.body });
+      .json({
+        error: "Failed to fetch webhooks",
+        details: err.body,
+        message: err.message,
+      });
   }
 });
 
@@ -533,7 +581,7 @@ app.post("/api/webhooks", async (req, res) => {
   }
 
   try {
-    const data = await callRolloutApi({
+    const data = await callRolloutApi(req, {
       baseUrl: ROLLOUT_CRM_API_BASE,
       path: "/webhooks",
       method: "POST",
@@ -553,8 +601,54 @@ app.post("/api/webhooks", async (req, res) => {
     const status = err.status || 500;
     res
       .status(status)
-      .json({ error: "Failed to create webhook", details: err.body });
+      .json({
+        error: "Failed to create webhook",
+        details: err.body,
+        message: err.message,
+      });
   }
+});
+
+app.get("/api/session/rollout-client", (req, res) => {
+  const stored = getSessionRolloutClientCredentials(req);
+  res.json({
+    configured: Boolean(stored),
+    clientId: stored?.clientId || "",
+    updatedAt:
+      typeof req.session?.rolloutClientCredentials?.updatedAt === "string"
+        ? req.session.rolloutClientCredentials.updatedAt
+        : null,
+    defaultClientId: DEFAULT_ROLLOUT_CLIENT_ID,
+  });
+});
+
+app.post("/api/session/rollout-client", (req, res) => {
+  const { clientId, clientSecret } = req.body || {};
+  const sanitizedId = sanitizeClientId(clientId);
+  const sanitizedSecret = sanitizeClientSecret(clientSecret);
+
+  if (!sanitizedId || !sanitizedSecret) {
+    res.status(400).json({
+      error: "clientId and clientSecret must be non-empty strings",
+    });
+    return;
+  }
+
+  req.session.rolloutClientCredentials = {
+    clientId: sanitizedId,
+    clientSecret: sanitizedSecret,
+    updatedAt: new Date().toISOString(),
+  };
+
+  res.json({
+    configured: true,
+    clientId: sanitizedId,
+  });
+});
+
+app.delete("/api/session/rollout-client", (req, res) => {
+  delete req.session.rolloutClientCredentials;
+  res.status(204).end();
 });
 
 app.get("/api/session/consumer-key", (req, res) => {
@@ -651,7 +745,7 @@ app.delete("/api/webhooks/:id", async (req, res) => {
   }
 
   try {
-    await callRolloutApi({
+    await callRolloutApi(req, {
       baseUrl: ROLLOUT_CRM_API_BASE,
       path: `/webhooks/${id}`,
       method: "DELETE",
@@ -666,7 +760,11 @@ app.delete("/api/webhooks/:id", async (req, res) => {
     const status = err.status || 500;
     res
       .status(status)
-      .json({ error: "Failed to delete webhook", details: err.body });
+      .json({
+        error: "Failed to delete webhook",
+        details: err.body,
+        message: err.message,
+      });
   }
 });
 
