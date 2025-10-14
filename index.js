@@ -581,15 +581,24 @@ app.post("/api/webhooks", async (req, res) => {
   }
 
   try {
+    const payload = {
+      url: webhookUrl,
+      event,
+    };
+
+    if (
+      filters &&
+      typeof filters === "object" &&
+      Object.keys(filters).length > 0
+    ) {
+      payload.filters = filters;
+    }
+
     const data = await callRolloutApi(req, {
       baseUrl: ROLLOUT_CRM_API_BASE,
       path: "/webhooks",
       method: "POST",
-      body: {
-        url: webhookUrl,
-        event,
-        filters: filters && typeof filters === "object" ? filters : {},
-      },
+      body: payload,
       consumerKey: resolveConsumerKey(req, consumerKey),
       headers: {
         "x-rollout-credential-id": credentialId,
