@@ -1097,6 +1097,7 @@ export default function App() {
           >
             <CredentialsManager
               key={rolloutProviderKey}
+              entitiesToSync={{ notes: true }}
               onCredentialAdded={handleCredentialChange}
               onCredentialDeleted={handleCredentialChange}
             />
