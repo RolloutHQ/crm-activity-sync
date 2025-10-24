@@ -1,89 +1,10 @@
-const path = require("path");
-const fs = require("fs");
-const express = require("express");
-const session = require("express-session");
-const cors = require("cors");
-const jwt = require("jsonwebtoken");
-require("dotenv").config();
+// Bootstrap server from src/server to improve readability and modularity.
+require("./src/server").start();
 
-const app = express();
-const port = process.env.PORT || 5174;
-const DEFAULT_ROLLOUT_CLIENT_ID =
-  (process.env.ROLLOUT_CLIENT_ID || "").trim();
-const DEFAULT_ROLLOUT_CLIENT_SECRET =
-  (process.env.ROLLOUT_CLIENT_SECRET || "").trim();
-const DEFAULT_CONSUMER_KEY =
-  process.env.ROLLOUT_CONSUMER_KEY || "demo-consumer";
-const TOKEN_TTL_SECS =
-  Number(process.env.ROLLOUT_TOKEN_TTL_SECS) || 60 * 60;
-const SESSION_SECRET = process.env.SESSION_SECRET || "rollout-demo-secret";
-const SESSION_MAX_AGE_MS =
-  Number(process.env.SESSION_MAX_AGE_MS) || 1000 * 60 * 60 * 12;
-const ROLLOUT_API_BASE =
-  process.env.ROLLOUT_API_BASE || "https://universal.rollout.com/api";
-const ROLLOUT_CRM_API_BASE =
-  process.env.ROLLOUT_CRM_API_BASE || "https://crm.universal.rollout.com/api";
-const PERSON_RECORDS_LIMIT =
-  Number(process.env.PERSON_RECORDS_LIMIT || process.env.PERSON_EVENTS_LIMIT) ||
-  25;
-const MAX_PAGINATED_REQUESTS =
-  Number(process.env.MAX_PAGINATED_REQUESTS) || 5;
+// The remainder of this file is intentionally left minimal.
+// All server logic has been decomposed under src/ for readability.
 
-function sanitizeConsumerKey(value) {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function resolveConsumerKey(req, provided) {
-  const override = sanitizeConsumerKey(provided);
-  if (override) {
-    return override;
-  }
-  const sessionKey = sanitizeConsumerKey(req.session?.consumerKey);
-  if (sessionKey) {
-    return sessionKey;
-  }
-  return DEFAULT_CONSUMER_KEY;
-}
-
-function sanitizeClientId(value) {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function sanitizeClientSecret(value) {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function getSessionRolloutClientCredentials(req) {
-  const stored = req.session?.rolloutClientCredentials;
-  if (!stored || typeof stored !== "object") {
-    return null;
-  }
-  const clientId = sanitizeClientId(stored.clientId);
-  const clientSecret = sanitizeClientSecret(stored.clientSecret);
-  if (!clientId || !clientSecret) {
-    return null;
-  }
-  return {
-    clientId,
-    clientSecret,
-    updatedAt:
-      typeof stored.updatedAt === "string" && stored.updatedAt.length > 0
-        ? stored.updatedAt
-        : null,
-  };
-}
+// (legacy code removed; see src/* for implementation)
 
 function getEffectiveRolloutClientCredentials(req) {
   const sessionCreds = getSessionRolloutClientCredentials(req);

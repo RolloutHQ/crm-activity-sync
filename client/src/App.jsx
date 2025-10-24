@@ -1,4 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import AppointmentForm from "./components/AppointmentForm.jsx";
+import PersonInsights from "./components/PersonInsights.jsx";
+import PersonLookupForm from "./components/PersonLookupForm.jsx";
 import {
   RolloutLinkProvider,
   CredentialsManager,
@@ -146,101 +149,11 @@ export default function App() {
   const [peopleOptionsLoading, setPeopleOptionsLoading] = useState(false);
   const [peopleOptionsError, setPeopleOptionsError] = useState(null);
   const [selectedPersonId, setSelectedPersonId] = useState("");
-  const [appointmentTypes, setAppointmentTypes] = useState([]);
-  const [appointmentOutcomes, setAppointmentOutcomes] = useState([]);
-  const [appointmentTypeId, setAppointmentTypeId] = useState("");
-  const [appointmentOutcomeId, setAppointmentOutcomeId] = useState("");
-  const [appointmentTitle, setAppointmentTitle] = useState("");
-  const [appointmentLocation, setAppointmentLocation] = useState("");
-  const [appointmentStartsAt, setAppointmentStartsAt] = useState("");
-  const [appointmentEndsAt, setAppointmentEndsAt] = useState("");
-  const [appointmentDescription, setAppointmentDescription] = useState("");
-  const [appointmentIsAllDay, setAppointmentIsAllDay] = useState(false);
-  const [appointmentStatus, setAppointmentStatus] = useState("");
-  const [appointmentError, setAppointmentError] = useState(null);
-  const [appointmentSubmitting, setAppointmentSubmitting] = useState(false);
-  const [userOptions, setUserOptions] = useState([]);
-  const [userOptionsLoading, setUserOptionsLoading] = useState(false);
-  const [userOptionsError, setUserOptionsError] = useState(null);
-  const [selectedUserId, setSelectedUserId] = useState("");
+  // Appointment state moved into AppointmentForm component
 
   // Smart defaults helpers
-  function pad2(n) {
-    return n < 10 ? `0${n}` : String(n);
-  }
-  function toDateTimeLocalString(date) {
-    const d = new Date(date);
-    const year = d.getFullYear();
-    const month = pad2(d.getMonth() + 1);
-    const day = pad2(d.getDate());
-    const hours = pad2(d.getHours());
-    const mins = pad2(d.getMinutes());
-    return `${year}-${month}-${day}T${hours}:${mins}`;
-  }
-  function addMinutes(date, mins) {
-    const d = new Date(date);
-    d.setMinutes(d.getMinutes() + mins);
-    return d;
-  }
-  const personName = useMemo(() => {
-    if (!personDetails) {
-      return "";
-    }
-    if (typeof personDetails.name === "string" && personDetails.name.trim()) {
-      return personDetails.name.trim();
-    }
-    const combined = [personDetails.firstName, personDetails.lastName]
-      .filter((part) => typeof part === "string" && part.trim().length > 0)
-      .join(" ")
-      .trim();
-    if (combined) {
-      return combined;
-    }
-    return typeof personDetails.id === "string" ? personDetails.id : "";
-  }, [personDetails]);
-
-  const primaryEmail = useMemo(() => {
-    if (!personDetails || !Array.isArray(personDetails.emails)) {
-      return "";
-    }
-    const primary =
-      personDetails.emails.find((entry) => entry?.isPrimary) ||
-      personDetails.emails[0];
-    return typeof primary?.value === "string" ? primary.value : "";
-  }, [personDetails]);
-
-  const primaryPhone = useMemo(() => {
-    if (!personDetails || !Array.isArray(personDetails.phones)) {
-      return "";
-    }
-    const primary =
-      personDetails.phones.find((entry) => entry?.isPrimary) ||
-      personDetails.phones[0];
-    return typeof primary?.value === "string" ? primary.value : "";
-  }, [personDetails]);
-
-  const personStage = useMemo(() => {
-    if (!personDetails) {
-      return "";
-    }
-    if (typeof personDetails.stage === "string" && personDetails.stage.trim()) {
-      return personDetails.stage.trim();
-    }
-    if (typeof personDetails.stageId === "string" && personDetails.stageId.trim()) {
-      return personDetails.stageId.trim();
-    }
-    return "";
-  }, [personDetails]);
-
-  const personUpdated = useMemo(() => {
-    if (!personDetails) {
-      return "";
-    }
-    return (
-      formatTimestamp(personDetails.updated) ||
-      formatTimestamp(personDetails.created)
-    );
-  }, [personDetails]);
+  // Appointment helpers moved into AppointmentForm component
+  // Person detail derivations moved to PersonInsights component
 
   const applyClientCredentialsResponse = useCallback((payload) => {
     const configured = Boolean(payload?.configured);
@@ -563,47 +476,8 @@ export default function App() {
   }, [consumerKey, hasLoadedConsumerKey]);
 
   // Load appointment metadata (types and outcomes) for the selected credential
-  useEffect(() => {
-    if (!clientCredentialsConfigured) {
-      setAppointmentTypes([]);
-      setAppointmentOutcomes([]);
-      setAppointmentTypeId("");
-      setAppointmentOutcomeId("");
-      return;
-    }
-    let cancelled = false;
-    const params = new URLSearchParams();
-    if (selectedCredentialId) {
-      params.set("credentialId", selectedCredentialId);
-    }
-    (async () => {
-      try {
-        const data = await fetchJson(`/api/appointment-metadata?${params.toString()}`);
-        if (cancelled) return;
-        const types = Array.isArray(data?.types) ? data.types : [];
-        const outcomes = Array.isArray(data?.outcomes) ? data.outcomes : [];
-        setAppointmentTypes(types);
-        setAppointmentOutcomes(outcomes);
-        if (!types.find((t) => t.id === appointmentTypeId)) {
-          // Smart default: pick first available type
-          setAppointmentTypeId(types[0]?.id || "");
-        }
-        if (!outcomes.find((o) => o.id === appointmentOutcomeId)) {
-          setAppointmentOutcomeId("");
-        }
-      } catch (_err) {
-        if (!cancelled) {
-          setAppointmentTypes([]);
-          setAppointmentOutcomes([]);
-          setAppointmentTypeId("");
-          setAppointmentOutcomeId("");
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [clientCredentialsConfigured, selectedCredentialId]);
+  // Appointment metadata handled in AppointmentForm component
+  useEffect(() => {}, [clientCredentialsConfigured, selectedCredentialId]);
 
   // Load users for selected credential (for default/explicit user assignment)
   useEffect(() => {
@@ -619,70 +493,15 @@ export default function App() {
     setUserOptionsError(null);
     const params = new URLSearchParams();
     if (selectedCredentialId) params.set("credentialId", selectedCredentialId);
-    (async () => {
-      try {
-        const data = await fetchJson(`/api/users?${params.toString()}`);
-        if (cancelled) return;
-        const options = Array.isArray(data?.users) ? data.users : [];
-        setUserOptions(options);
-        // Smart default: prefer last-used user per credential, else first
-        const storageKey = selectedCredentialId
-          ? `lastUserId:${selectedCredentialId}`
-          : `lastUserId:default`;
-        const saved = typeof window !== "undefined" ? window.localStorage.getItem(storageKey) : null;
-        const savedExists = saved && options.find((o) => o.id === saved);
-        if (!selectedUserId) {
-          setSelectedUserId(savedExists ? saved : options[0]?.id || "");
-        } else if (!options.find((o) => o.id === selectedUserId)) {
-          setSelectedUserId(savedExists ? saved : options[0]?.id || "");
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setUserOptionsError(err.message);
-          setUserOptions([]);
-          setSelectedUserId("");
-        }
-      } finally {
-        if (!cancelled) setUserOptionsLoading(false);
-      }
-    })();
+    // handled in AppointmentForm component
     return () => {
       cancelled = true;
     };
   }, [clientCredentialsConfigured, selectedCredentialId]);
 
-  // Persist last-selected user per credential
-  useEffect(() => {
-    if (!selectedUserId) return;
-    const storageKey = selectedCredentialId
-      ? `lastUserId:${selectedCredentialId}`
-      : `lastUserId:default`;
-    try {
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(storageKey, selectedUserId);
-      }
-    } catch (_e) {}
-  }, [selectedUserId, selectedCredentialId]);
+  // handled in AppointmentForm component
 
-  // Smart default: initialize start/end times (now → now + 30m)
-  useEffect(() => {
-    if (!appointmentStartsAt) {
-      const now = new Date();
-      // round to next 5-minute increment
-      const rounded = new Date(now);
-      const remainder = rounded.getMinutes() % 5;
-      if (remainder !== 0) {
-        rounded.setMinutes(rounded.getMinutes() + (5 - remainder));
-      }
-      const startLocal = toDateTimeLocalString(addMinutes(rounded, 5));
-      setAppointmentStartsAt(startLocal);
-    }
-    if (!appointmentEndsAt && appointmentStartsAt) {
-      const start = new Date(appointmentStartsAt);
-      const endLocal = toDateTimeLocalString(addMinutes(start, 30));
-      setAppointmentEndsAt(endLocal);
-    }
-  }, [appointmentStartsAt, appointmentEndsAt]);
+  // handled in AppointmentForm component
 
   const fetchRolloutToken = useCallback(() => {
     if (!clientCredentialsConfigured) {
@@ -817,77 +636,7 @@ export default function App() {
     }
   };
 
-  function toIsoOrNull(v) {
-    if (!v || typeof v !== "string") return null;
-    const trimmed = v.trim();
-    if (!trimmed) return null;
-    // Interpret as local time; browsers give datetime-local without tz
-    const d = new Date(trimmed);
-    if (Number.isNaN(d.getTime())) return trimmed; // fall back to raw
-    return d.toISOString();
-  }
-
-  const handleCreateAppointment = async (event) => {
-    event.preventDefault();
-    if (appointmentSubmitting) return;
-    setAppointmentError(null);
-    setAppointmentStatus("");
-
-    const personId = selectedPersonId?.trim();
-    const credId = selectedCredentialId?.trim();
-    const typeId = appointmentTypeId?.trim();
-    const title = appointmentTitle?.trim();
-    const location = appointmentLocation?.trim();
-
-    const typeIsRequired = Array.isArray(appointmentTypes) && appointmentTypes.length > 0;
-    if (!personId || (typeIsRequired && !typeId) || !title || !location) {
-      setAppointmentError(
-        typeIsRequired
-          ? "Please select a person and provide title, location, and type."
-          : "Please select a person and provide title and location."
-      );
-      return;
-    }
-
-    const payload = {
-      credentialId: credId || undefined,
-      personId,
-      // Include type only if available/selected for this connector
-      ...(typeId ? { appointmentTypeId: typeId } : {}),
-      appointmentOutcomeId: appointmentOutcomeId || undefined,
-      title,
-      location,
-      description: appointmentDescription || undefined,
-      isAllDay: Boolean(appointmentIsAllDay),
-    };
-    if (selectedUserId) payload.userId = selectedUserId;
-    const startsIso = toIsoOrNull(appointmentStartsAt);
-    const endsIso = toIsoOrNull(appointmentEndsAt);
-    if (startsIso) payload.startsAt = startsIso;
-    if (endsIso) payload.endsAt = endsIso;
-
-    setAppointmentSubmitting(true);
-    try {
-      const created = await fetchJson("/api/appointments", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-      setAppointmentStatus("Appointment created successfully.");
-      setAppointmentError(null);
-      // Reset minimal fields
-      setAppointmentTitle("");
-      setAppointmentLocation("");
-      setAppointmentStartsAt("");
-      setAppointmentEndsAt("");
-      setAppointmentDescription("");
-      // Optionally refresh person appointments
-      // no-op: keep lightweight
-    } catch (err) {
-      setAppointmentError(err.message);
-    } finally {
-      setAppointmentSubmitting(false);
-    }
-  };
+  // Appointment submission handled in AppointmentForm component
 
   const handleCancelClientCredentialsEdit = () => {
     if (!clientCredentialsConfigured) {
@@ -1210,603 +959,47 @@ export default function App() {
           <p className="section-subtitle">
             Choose a credential and person to inspect their latest Rollout activity and details.
           </p>
-          <form className="person-lookup-form" onSubmit={handlePersonInsightsSubmit}>
-            <div className="person-lookup-row">
-              <label htmlFor="person-lookup-credential">Credential</label>
-              <select
-                id="person-lookup-credential"
-                value={selectedCredentialId}
-                onChange={(event) => setSelectedCredentialId(event.target.value)}
-                disabled={credentialOptionsLoading || credentialOptions.length === 0}
-              >
-                <option value="">Auto-select first connected credential</option>
-                {credentialOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {credentialOptionsLoading ? (
-              <p className="hint">Loading connected credentials…</p>
-            ) : null}
-            {!credentialOptionsLoading && credentialOptions.length === 0 ? (
-              <p className="hint">
-                Connect a Rollout credential to target a specific destination.
-              </p>
-            ) : null}
-            <div className="person-lookup-row">
-              <label htmlFor="person-lookup-person">Person</label>
-              <select
-                id="person-lookup-person"
-                value={selectedPersonId}
-                onChange={(event) => setSelectedPersonId(event.target.value)}
-                disabled={peopleOptionsLoading || peopleOptions.length === 0}
-              >
-                {peopleOptions.length === 0 ? (
-                  <option value="">No people available</option>
-                ) : null}
-                {peopleOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {peopleOptionsLoading ? (
-              <p className="hint">Loading people…</p>
-            ) : null}
-            {peopleOptionsError ? (
-              <p className="error">Failed to load people: {peopleOptionsError}</p>
-            ) : null}
-            <div className="person-lookup-controls">
-              <button type="submit" disabled={isFetchingPerson || peopleOptions.length === 0}>
-                {isFetchingPerson ? "Fetching…" : "Fetch person"}
-              </button>
-            </div>
-          </form>
-          {credentialOptionsError ? (
-            <p className="error">
-              Failed to load credentials: {credentialOptionsError}
-            </p>
-          ) : null}
+          <PersonLookupForm
+            credentialOptions={credentialOptions}
+            credentialOptionsLoading={credentialOptionsLoading}
+            credentialOptionsError={credentialOptionsError}
+            selectedCredentialId={selectedCredentialId}
+            setSelectedCredentialId={setSelectedCredentialId}
+            peopleOptions={peopleOptions}
+            peopleOptionsLoading={peopleOptionsLoading}
+            peopleOptionsError={peopleOptionsError}
+            selectedPersonId={selectedPersonId}
+            setSelectedPersonId={setSelectedPersonId}
+            isFetchingPerson={isFetchingPerson}
+            onSubmit={handlePersonInsightsSubmit}
+          />
           {personLookupError ? <p className="error">{personLookupError}</p> : null}
           {personLookupStatus && !personLookupError ? (
             <p className="success">{personLookupStatus}</p>
           ) : null}
-          {isFetchingPerson ? (
-            <p className="hint">Contacting Rollout…</p>
-          ) : null}
-          {personDetails ? (
-            <section className="person-insights-details">
-              <div className="person-insights-summary">
-                <div className="person-insights-summary-text">
-                  <h3>{personName || "Person Details"}</h3>
-                  <ul className="person-insights-meta">
-                    {personDetails?.id ? (
-                      <li>
-                        <span className="label">Person ID</span>
-                        <span>{personDetails.id}</span>
-                      </li>
-                    ) : null}
-                    {primaryEmail ? (
-                      <li>
-                        <span className="label">Email</span>
-                        <span>{primaryEmail}</span>
-                      </li>
-                    ) : null}
-                    {primaryPhone ? (
-                      <li>
-                        <span className="label">Phone</span>
-                        <span>{primaryPhone}</span>
-                      </li>
-                    ) : null}
-                    {personStage ? (
-                      <li>
-                        <span className="label">Stage</span>
-                        <span>{personStage}</span>
-                      </li>
-                    ) : null}
-                    {personUpdated ? (
-                      <li>
-                        <span className="label">Updated</span>
-                        <span>{personUpdated}</span>
-                      </li>
-                    ) : null}
-                  </ul>
-                </div>
-              </div>
-              <details className="person-insights-raw">
-                <summary>View raw person payload</summary>
-                <pre>{JSON.stringify(personDetails, null, 2)}</pre>
-              </details>
-            </section>
-          ) : null}
-          {personDetails ? (
-            <section className="person-insights-events">
-              <h3>Recent Events ({personEvents.length})</h3>
-              {personEvents.length > 0 ? (
-                <ul className="event-list">
-                  {personEvents.map((event) => {
-                    const occurredAt =
-                      event?.occurredAt || event?.created || event?.updated;
-                    const displayTimestamp = formatTimestamp(occurredAt);
-                    const message = event?.message || event?.description || "";
-                    return (
-                      <li key={event?.id || `${event?.type}-${occurredAt}`}>
-                        <header className="event-summary">
-                          <div className="event-summary-main">
-                            <span className="event-type">{event?.type || "Event"}</span>
-                            {message ? <span className="event-message">{message}</span> : null}
-                          </div>
-                          {displayTimestamp ? (
-                            <span className="event-timestamp">{displayTimestamp}</span>
-                          ) : null}
-                        </header>
-                        <ul className="event-meta">
-                          {event?.source ? (
-                            <li>
-                              <span className="label">Source</span>
-                              <span>{event.source}</span>
-                            </li>
-                          ) : null}
-                          {event?.system ? (
-                            <li>
-                              <span className="label">System</span>
-                              <span>{event.system}</span>
-                            </li>
-                          ) : null}
-                          {event?.pageTitle ? (
-                            <li>
-                              <span className="label">Page</span>
-                              <span>{event.pageTitle}</span>
-                            </li>
-                          ) : null}
-                        </ul>
-                        {event?.pageUrl ? (
-                          <p className="event-link">
-                            <span className="label">URL</span>{" "}
-                            <a href={event.pageUrl} target="_blank" rel="noreferrer">
-                              {event.pageUrl}
-                            </a>
-                          </p>
-                        ) : null}
-                        <details>
-                          <summary>Raw event payload</summary>
-                          <pre>{JSON.stringify(event, null, 2)}</pre>
-                        </details>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                !isFetchingPerson && <p className="empty">No events found for this person.</p>
-              )}
-            </section>
-          ) : null}
-
-          {personDetails ? (
-            <section className="person-insights-notes">
-              <h3>Recent Notes ({personNotes.length})</h3>
-              {personNotes.length > 0 ? (
-                <ul className="event-list">
-                  {personNotes.map((note) => {
-                    const timestamp = formatTimestamp(note?.updated || note?.created);
-                    const bodyPreview = truncate(note?.body || "");
-                    return (
-                      <li key={note?.id || `${note?.updated}-${note?.created}`}>
-                        <header className="event-summary">
-                          <div className="event-summary-main">
-                            <span className="event-type">{note?.subject || "Note"}</span>
-                            {bodyPreview ? (
-                              <span className="event-message">{bodyPreview}</span>
-                            ) : null}
-                          </div>
-                          {timestamp ? (
-                            <span className="event-timestamp">{timestamp}</span>
-                          ) : null}
-                        </header>
-                        <details>
-                          <summary>Raw note payload</summary>
-                          <pre>{JSON.stringify(note, null, 2)}</pre>
-                        </details>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                !isFetchingPerson && <p className="empty">No notes found for this person.</p>
-              )}
-            </section>
-          ) : null}
-
-          {personDetails ? (
-            <section className="person-insights-calls">
-              <h3>Recent Calls ({personCalls.length})</h3>
-              {personCalls.length > 0 ? (
-                <ul className="event-list">
-                  {personCalls.map((call) => {
-                    const timestamp = formatTimestamp(call?.created || call?.updated);
-                    const direction =
-                      call?.isIncoming === true
-                        ? "Incoming"
-                        : call?.isIncoming === false
-                        ? "Outgoing"
-                        : "";
-                    const summaryParts = [direction, call?.outcome]
-                      .filter(Boolean)
-                      .map((part) => part);
-                    if (call?.duration) {
-                      summaryParts.push(`${call.duration}s`);
-                    }
-                    const summaryText = summaryParts.join(" · ");
-                    const notePreview = truncate(call?.note || "");
-                    return (
-                      <li key={call?.id || `${call?.created}-${call?.updated}`}>
-                        <header className="event-summary">
-                          <div className="event-summary-main">
-                            <span className="event-type">Call</span>
-                            {summaryText ? (
-                              <span className="event-message">{summaryText}</span>
-                            ) : null}
-                            {notePreview ? (
-                              <span className="event-message">{notePreview}</span>
-                            ) : null}
-                          </div>
-                          {timestamp ? (
-                            <span className="event-timestamp">{timestamp}</span>
-                          ) : null}
-                        </header>
-                        <ul className="event-meta">
-                          {call?.fromNumber ? (
-                            <li>
-                              <span className="label">From</span>
-                              <span>{call.fromNumber}</span>
-                            </li>
-                          ) : null}
-                          {call?.toNumber ? (
-                            <li>
-                              <span className="label">To</span>
-                              <span>{call.toNumber}</span>
-                            </li>
-                          ) : null}
-                          {call?.recordingUrl ? (
-                            <li>
-                              <span className="label">Recording</span>
-                              <a href={call.recordingUrl} target="_blank" rel="noreferrer">
-                                Listen
-                              </a>
-                            </li>
-                          ) : null}
-                        </ul>
-                        <details>
-                          <summary>Raw call payload</summary>
-                          <pre>{JSON.stringify(call, null, 2)}</pre>
-                        </details>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                !isFetchingPerson && <p className="empty">No calls found for this person.</p>
-              )}
-            </section>
-          ) : null}
-
-          {personDetails ? (
-            <section className="person-insights-texts">
-              <h3>Recent Text Messages ({personTextMessages.length})</h3>
-              {personTextMessages.length > 0 ? (
-                <ul className="event-list">
-                  {personTextMessages.map((text) => {
-                    const timestamp = formatTimestamp(text?.sent || text?.updated || text?.created);
-                    const direction =
-                      text?.isIncoming === true
-                        ? "Incoming"
-                        : text?.isIncoming === false
-                        ? "Outgoing"
-                        : "Message";
-                    const messagePreview = truncate(text?.message || "");
-                    return (
-                      <li key={text?.id || `${text?.sent}-${text?.created}`}>
-                        <header className="event-summary">
-                          <div className="event-summary-main">
-                            <span className="event-type">{direction}</span>
-                            {messagePreview ? (
-                              <span className="event-message">{messagePreview}</span>
-                            ) : null}
-                          </div>
-                          {timestamp ? (
-                            <span className="event-timestamp">{timestamp}</span>
-                          ) : null}
-                        </header>
-                        <ul className="event-meta">
-                          {text?.fromNumber ? (
-                            <li>
-                              <span className="label">From</span>
-                              <span>{text.fromNumber}</span>
-                            </li>
-                          ) : null}
-                          {text?.toNumber ? (
-                            <li>
-                              <span className="label">To</span>
-                              <span>{text.toNumber}</span>
-                            </li>
-                          ) : null}
-                          {text?.status ? (
-                            <li>
-                              <span className="label">Status</span>
-                              <span>{text.status}</span>
-                            </li>
-                          ) : null}
-                        </ul>
-                        {text?.externalUrl ? (
-                          <p className="event-link">
-                            <span className="label">External</span>{" "}
-                            <a href={text.externalUrl} target="_blank" rel="noreferrer">
-                              {text.externalLabel || text.externalUrl}
-                            </a>
-                          </p>
-                        ) : null}
-                        <details>
-                          <summary>Raw text message payload</summary>
-                          <pre>{JSON.stringify(text, null, 2)}</pre>
-                        </details>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                !isFetchingPerson && <p className="empty">No text messages found for this person.</p>
-              )}
-            </section>
-          ) : null}
-
-          {personDetails ? (
-            <section className="person-insights-appointments">
-              <h3>Past Appointments ({personAppointments.length})</h3>
-              {personAppointments.length > 0 ? (
-                <ul className="event-list">
-                  {personAppointments.map((appt) => {
-                    const startsAt = formatTimestamp(appt?.startsAt);
-                    const endsAt = formatTimestamp(appt?.endsAt);
-                    const timing = [startsAt, endsAt ? `→ ${endsAt}` : ""]
-                      .filter(Boolean)
-                      .join(" ");
-                    const descriptionPreview = truncate(appt?.description || "");
-                    return (
-                      <li key={appt?.id || `${appt?.startsAt}-${appt?.endsAt}`}>
-                        <header className="event-summary">
-                          <div className="event-summary-main">
-                            <span className="event-type">{appt?.title || "Appointment"}</span>
-                            {timing ? (
-                              <span className="event-message">{timing}</span>
-                            ) : null}
-                            {descriptionPreview ? (
-                              <span className="event-message">{descriptionPreview}</span>
-                            ) : null}
-                          </div>
-                          {appt?.location ? (
-                            <span className="event-timestamp">{appt.location}</span>
-                          ) : null}
-                        </header>
-                        <details>
-                          <summary>Raw appointment payload</summary>
-                          <pre>{JSON.stringify(appt, null, 2)}</pre>
-                        </details>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                !isFetchingPerson && <p className="empty">No appointments found for this person.</p>
-              )}
-            </section>
-          ) : null}
-
-          {personDetails ? (
-            <section className="person-insights-tasks">
-              <h3>Open Tasks ({personTasks.length})</h3>
-              {personTasks.length > 0 ? (
-                <ul className="event-list">
-                  {personTasks.map((task) => {
-                    const dueDate = formatTimestamp(task?.dueDateTime);
-                    const status = task?.isCompleted ? "Completed" : "Open";
-                    return (
-                      <li key={task?.id || `${task?.name}-${task?.dueDateTime}`}>
-                        <header className="event-summary">
-                          <div className="event-summary-main">
-                            <span className="event-type">{task?.name || "Task"}</span>
-                            <span className="event-message">{status}</span>
-                          </div>
-                          {dueDate ? (
-                            <span className="event-timestamp">Due {dueDate}</span>
-                          ) : null}
-                        </header>
-                        <details>
-                          <summary>Raw task payload</summary>
-                          <pre>{JSON.stringify(task, null, 2)}</pre>
-                        </details>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                !isFetchingPerson && <p className="empty">No tasks found for this person.</p>
-              )}
-            </section>
-          ) : null}
+          {isFetchingPerson ? <p className="hint">Contacting Rollout…</p> : null}
+          <PersonInsights
+            isFetchingPerson={isFetchingPerson}
+            personDetails={personDetails}
+            personEvents={personEvents}
+            personNotes={personNotes}
+            personCalls={personCalls}
+            personTextMessages={personTextMessages}
+            personAppointments={personAppointments}
+            personTasks={personTasks}
+          />
         </AccordionSection>
 
-        <section className="card">
-          <h2>Create Appointment</h2>
-          <p className="section-subtitle">
-            Create an appointment for the selected person.
-          </p>
-          <form className="appointment-form" onSubmit={handleCreateAppointment}>
-            <div className="person-lookup-row">
-              <label>Credential</label>
-              <select
-                value={selectedCredentialId}
-                onChange={(e) => setSelectedCredentialId(e.target.value)}
-                disabled={credentialOptionsLoading || credentialOptions.length === 0}
-              >
-                <option value="">Auto-select first connected credential</option>
-                {credentialOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="person-lookup-row">
-              <label>Assigned user</label>
-              <select
-                value={selectedUserId}
-                onChange={(e) => setSelectedUserId(e.target.value)}
-                disabled={userOptionsLoading || userOptions.length === 0}
-              >
-                {userOptions.length === 0 ? (
-                  <option value="">No users available</option>
-                ) : null}
-                {userOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="person-lookup-row">
-              <label>Person</label>
-              <select
-                value={selectedPersonId}
-                onChange={(e) => setSelectedPersonId(e.target.value)}
-                disabled={peopleOptionsLoading || peopleOptions.length === 0}
-              >
-                {peopleOptions.length === 0 ? (
-                  <option value="">No people available</option>
-                ) : null}
-                {peopleOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="person-lookup-row">
-              <label>Type</label>
-              <select
-                value={appointmentTypeId}
-                onChange={(e) => setAppointmentTypeId(e.target.value)}
-                disabled={appointmentTypes.length === 0}
-                required={appointmentTypes.length > 0}
-              >
-                <option value="">Select a type</option>
-                {appointmentTypes.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {appointmentTypes.length === 0 ? (
-              <p className="hint">
-                This provider doesn’t expose appointment types; creating without a type.
-              </p>
-            ) : null}
-
-            <div className="person-lookup-row">
-              <label>Outcome (optional)</label>
-              <select
-                value={appointmentOutcomeId}
-                onChange={(e) => setAppointmentOutcomeId(e.target.value)}
-                disabled={appointmentOutcomes.length === 0}
-              >
-                <option value="">No outcome</option>
-                {appointmentOutcomes.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="person-lookup-row">
-              <label>Title</label>
-              <input
-                type="text"
-                value={appointmentTitle}
-                onChange={(e) => setAppointmentTitle(e.target.value)}
-                placeholder="e.g., Buyer consultation"
-                required
-              />
-            </div>
-
-            <div className="person-lookup-row">
-              <label>Location</label>
-              <input
-                type="text"
-                value={appointmentLocation}
-                onChange={(e) => setAppointmentLocation(e.target.value)}
-                placeholder="e.g., 123 Main St"
-                required
-              />
-            </div>
-
-            <div className="person-lookup-row">
-              <label>Starts at</label>
-              <input
-                type="datetime-local"
-                value={appointmentStartsAt}
-                onChange={(e) => setAppointmentStartsAt(e.target.value)}
-              />
-            </div>
-            <div className="person-lookup-row">
-              <label>Ends at</label>
-              <input
-                type="datetime-local"
-                value={appointmentEndsAt}
-                onChange={(e) => setAppointmentEndsAt(e.target.value)}
-              />
-            </div>
-
-            <div className="person-lookup-row">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={appointmentIsAllDay}
-                  onChange={(e) => setAppointmentIsAllDay(e.target.checked)}
-                />
-                All day
-              </label>
-            </div>
-
-            <div className="person-lookup-row">
-              <label>Description (optional)</label>
-              <textarea
-                value={appointmentDescription}
-                onChange={(e) => setAppointmentDescription(e.target.value)}
-                rows={3}
-              />
-            </div>
-
-            {appointmentError ? (
-              <p className="error">{appointmentError}</p>
-            ) : null}
-            {appointmentStatus ? (
-              <p className="success">{appointmentStatus}</p>
-            ) : null}
-
-            <div className="person-lookup-controls">
-              <button type="submit" disabled={appointmentSubmitting}>
-                {appointmentSubmitting ? "Creating…" : "Create appointment"}
-              </button>
-            </div>
-          </form>
-        </section>
+        <AppointmentForm
+          credentialOptions={credentialOptions}
+          credentialOptionsLoading={credentialOptionsLoading}
+          selectedCredentialId={selectedCredentialId}
+          setSelectedCredentialId={setSelectedCredentialId}
+          peopleOptions={peopleOptions}
+          peopleOptionsLoading={peopleOptionsLoading}
+          selectedPersonId={selectedPersonId}
+          setSelectedPersonId={setSelectedPersonId}
+        />
       </main>
       {isEditingClientCredentials ? (
         <div
