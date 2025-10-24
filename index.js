@@ -533,38 +533,9 @@ async function fetchPersonTasks(req, credentialId, personId) {
   });
 }
 
-async function createAppointment(req, credentialId, body) {
-  const sanitizedBody = { ...body };
-  const coerceDateField = (key) => {
-    if (!sanitizedBody[key]) {
-      return;
-    }
-    if (typeof sanitizedBody[key] === "number") {
-      return;
-    }
-    if (sanitizedBody[key] instanceof Date) {
-      sanitizedBody[key] = sanitizedBody[key].toISOString();
-      return;
-    }
-    if (typeof sanitizedBody[key] === "string") {
-      const parsed = Date.parse(sanitizedBody[key]);
-      if (!Number.isNaN(parsed)) {
-        sanitizedBody[key] = new Date(parsed).toISOString();
-      }
-    }
-  };
-
-  coerceDateField("startsAt");
-  coerceDateField("endsAt");
-
-  return callRolloutApi(req, {
-    baseUrl: ROLLOUT_CRM_API_BASE,
-    path: "/appointments",
-    method: "POST",
-    credentialId,
-    body: sanitizedBody,
-  });
-}
+//
+// Note: createAppointment helper was removed to avoid duplication with
+// the adaptive POST /api/appointments route below.
 
 // Respect the Render proxy so secure cookies are transmitted correctly.
 app.set("trust proxy", 1);
