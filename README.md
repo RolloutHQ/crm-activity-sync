@@ -1,4 +1,4 @@
-# Rollout Webhooks Demo
+# Rollout Activity Sync Demo
 
 A full-stack demo for exercising Rollout credential management and webhook flows. The project exposes a small Express backend with a Vite-powered React UI.
 

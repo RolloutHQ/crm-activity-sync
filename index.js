@@ -1,49 +1,33 @@
 const path = require("path");
 const fs = require("fs");
-const { randomUUID } = require("crypto");
 const express = require("express");
 const session = require("express-session");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
-const Database = require("better-sqlite3");
 require("dotenv").config();
 
 const app = express();
 const port = process.env.PORT || 5174;
+const DEFAULT_ROLLOUT_CLIENT_ID =
+  (process.env.ROLLOUT_CLIENT_ID || "").trim();
+const DEFAULT_ROLLOUT_CLIENT_SECRET =
+  (process.env.ROLLOUT_CLIENT_SECRET || "").trim();
+const DEFAULT_CONSUMER_KEY =
+  process.env.ROLLOUT_CONSUMER_KEY || "demo-consumer";
+const TOKEN_TTL_SECS =
+  Number(process.env.ROLLOUT_TOKEN_TTL_SECS) || 60 * 60;
+const SESSION_SECRET = process.env.SESSION_SECRET || "rollout-demo-secret";
+const SESSION_MAX_AGE_MS =
+  Number(process.env.SESSION_MAX_AGE_MS) || 1000 * 60 * 60 * 12;
 const ROLLOUT_API_BASE =
   process.env.ROLLOUT_API_BASE || "https://universal.rollout.com/api";
 const ROLLOUT_CRM_API_BASE =
   process.env.ROLLOUT_CRM_API_BASE || "https://crm.universal.rollout.com/api";
-const DEFAULT_ROLLOUT_CLIENT_ID =
-  (process.env.ROLLOUT_CLIENT_ID || "").trim();
-const DEFAULT_CONSUMER_KEY =
-  process.env.ROLLOUT_CONSUMER_KEY || "demo-consumer";
-const DEFAULT_ACCORDION_STATE = {
-  connectProvider: true,
-  connectedCredentials: true,
-  webhookTarget: true,
-  webhookSubscriptions: true,
-  receivedWebhooks: true,
-};
-const TOKEN_TTL_SECS =
-  Number(process.env.ROLLOUT_TOKEN_TTL_SECS) || 60 * 60;
-const DEFAULT_WEBHOOK_TARGET =
-  process.env.DEFAULT_WEBHOOK_TARGET ||
-  "https://rollout-webhooks-demo.onrender.com/webhooks";
-const MAX_RECEIVED_WEBHOOKS =
-  Number(process.env.MAX_RECEIVED_WEBHOOKS) || 100;
-const SESSION_SECRET = process.env.SESSION_SECRET || "rollout-demo-secret";
-const SESSION_MAX_AGE_MS =
-  Number(process.env.SESSION_MAX_AGE_MS) || 1000 * 60 * 60 * 12;
-const SESSION_DB_PATH =
-  process.env.SESSION_DB_PATH ||
-  path.join(__dirname, "session-data", "sessions.sqlite");
-const WEBHOOK_DB_PATH =
-  process.env.WEBHOOK_DB_PATH ||
-  path.join(__dirname, "session-data", "webhooks.sqlite");
-
-let webhookDb;
-let sessionDb;
+const PERSON_RECORDS_LIMIT =
+  Number(process.env.PERSON_RECORDS_LIMIT || process.env.PERSON_EVENTS_LIMIT) ||
+  25;
+const MAX_PAGINATED_REQUESTS =
+  Number(process.env.MAX_PAGINATED_REQUESTS) || 5;
 
 function sanitizeConsumerKey(value) {
   if (typeof value !== "string") {
@@ -63,18 +47,6 @@ function resolveConsumerKey(req, provided) {
     return sessionKey;
   }
   return DEFAULT_CONSUMER_KEY;
-}
-
-function normalizeAccordionState(value) {
-  const normalized = { ...DEFAULT_ACCORDION_STATE };
-  if (value && typeof value === "object") {
-    for (const key of Object.keys(DEFAULT_ACCORDION_STATE)) {
-      if (typeof value[key] === "boolean") {
-        normalized[key] = value[key];
-      }
-    }
-  }
-  return normalized;
 }
 
 function sanitizeClientId(value) {
@@ -103,11 +75,32 @@ function getSessionRolloutClientCredentials(req) {
   if (!clientId || !clientSecret) {
     return null;
   }
-  return { clientId, clientSecret };
+  return {
+    clientId,
+    clientSecret,
+    updatedAt:
+      typeof stored.updatedAt === "string" && stored.updatedAt.length > 0
+        ? stored.updatedAt
+        : null,
+  };
+}
+
+function getEffectiveRolloutClientCredentials(req) {
+  const sessionCreds = getSessionRolloutClientCredentials(req);
+  if (sessionCreds) {
+    return sessionCreds;
+  }
+  if (DEFAULT_ROLLOUT_CLIENT_ID && DEFAULT_ROLLOUT_CLIENT_SECRET) {
+    return {
+      clientId: DEFAULT_ROLLOUT_CLIENT_ID,
+      clientSecret: DEFAULT_ROLLOUT_CLIENT_SECRET,
+    };
+  }
+  return null;
 }
 
 function requireRolloutClientCredentials(req) {
-  const credentials = getSessionRolloutClientCredentials(req);
+  const credentials = getEffectiveRolloutClientCredentials(req);
   if (!credentials) {
     const error = new Error(
       "Rollout client credentials are not configured for this session"
@@ -118,209 +111,459 @@ function requireRolloutClientCredentials(req) {
   return credentials;
 }
 
-const dataDir = path.dirname(SESSION_DB_PATH);
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+function extractItems(data) {
+  if (!data) {
+    return [];
+  }
+  if (Array.isArray(data)) {
+    return data;
+  }
+  if (Array.isArray(data.items)) {
+    return data.items;
+  }
+  if (Array.isArray(data.data)) {
+    return data.data;
+  }
+  if (Array.isArray(data.credentials)) {
+    return data.credentials;
+  }
+  if (Array.isArray(data.results)) {
+    return data.results;
+  }
+  if (typeof data === "object") {
+    const firstArray = Object.values(data).find((value) => Array.isArray(value));
+    if (Array.isArray(firstArray)) {
+      return firstArray;
+    }
+  }
+  return [];
 }
 
-sessionDb = new Database(SESSION_DB_PATH);
-sessionDb.pragma("journal_mode = WAL");
-sessionDb.exec(`
-  CREATE TABLE IF NOT EXISTS sessions (
-    sid TEXT PRIMARY KEY,
-    sess TEXT NOT NULL,
-    expired INTEGER NOT NULL
-  )
-`);
+async function callRolloutApi(
+  req,
+  {
+    baseUrl,
+    path: apiPath,
+    method = "GET",
+    searchParams,
+    body,
+    consumerKey,
+    credentialId,
+    headers,
+  } = {}
+) {
+  const resolvedConsumerKey = resolveConsumerKey(req, consumerKey);
+  const token = createRolloutToken(req, resolvedConsumerKey);
+  const normalizedBase = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  const sanitizedPath = apiPath.startsWith("/")
+    ? apiPath.slice(1)
+    : apiPath;
+  const url = new URL(sanitizedPath, normalizedBase);
 
-webhookDb = new Database(WEBHOOK_DB_PATH);
-webhookDb.pragma("journal_mode = WAL");
-webhookDb.exec(`
-  CREATE TABLE IF NOT EXISTS received_webhooks (
-    id TEXT PRIMARY KEY,
-    received_at TEXT NOT NULL,
-    headers TEXT NOT NULL,
-    body TEXT NOT NULL
-  )
-`);
+  if (searchParams && typeof searchParams === "object") {
+    for (const [key, value] of Object.entries(searchParams)) {
+      if (value !== undefined && value !== null && value !== "") {
+        url.searchParams.set(key, String(value));
+      }
+    }
+  }
 
-const insertWebhookStmt = webhookDb.prepare(`
-  INSERT INTO received_webhooks (id, received_at, headers, body)
-  VALUES (@id, @received_at, @headers, @body)
-  ON CONFLICT(id) DO UPDATE SET
-    received_at = excluded.received_at,
-    headers = excluded.headers,
-    body = excluded.body
-`);
+  const requestHeaders = {
+    Authorization: `Bearer ${token}`,
+    ...(credentialId ? { "X-Rollout-Credential-Id": credentialId } : {}),
+    ...(headers || {}),
+  };
 
-const selectWebhooksStmt = webhookDb.prepare(`
-  SELECT id, received_at, headers, body
-  FROM received_webhooks
-  ORDER BY received_at DESC
-  LIMIT ?
-`);
+  let requestBody;
+  if (body !== undefined) {
+    requestHeaders["Content-Type"] = "application/json";
+    requestBody = JSON.stringify(body);
+  }
 
-const trimWebhooksStmt = webhookDb.prepare(`
-  DELETE FROM received_webhooks
-  WHERE id NOT IN (
-    SELECT id FROM received_webhooks
-    ORDER BY received_at DESC
-    LIMIT ?
-  )
-`);
-
-const clearWebhooksStmt = webhookDb.prepare(
-  "DELETE FROM received_webhooks"
-);
-
-function persistReceivedWebhook({ id, receivedAt, headers, body }) {
-  insertWebhookStmt.run({
-    id,
-    received_at: receivedAt,
-    headers: JSON.stringify(headers ?? {}),
-    body: JSON.stringify(body ?? null),
+  const response = await fetch(url.toString(), {
+    method,
+    headers: requestHeaders,
+    body: requestBody,
   });
-  trimWebhooksStmt.run(MAX_RECEIVED_WEBHOOKS);
-}
 
-function getStoredWebhooks(limit = MAX_RECEIVED_WEBHOOKS) {
-  return selectWebhooksStmt
-    .all(limit)
-    .map((row) => ({
-      id: row.id,
-      receivedAt: row.received_at,
-      headers: JSON.parse(row.headers),
-      body: JSON.parse(row.body),
-    }));
-}
+  console.log(
+    `[Rollout API] ${method} ${url.toString()}${
+      credentialId ? ` (credential ${credentialId})` : ""
+    }`
+  );
 
-function clearStoredWebhooks() {
-  clearWebhooksStmt.run();
-}
-
-class BetterSqlite3Store extends session.Store {
-  constructor(db, { ttl = SESSION_MAX_AGE_MS } = {}) {
-    super();
-    this.db = db;
-    this.defaultTTL = ttl;
-    this.statements = {
-      cleanup: db.prepare(
-        "DELETE FROM sessions WHERE expired <= :now"
-      ),
-      get: db.prepare(
-        "SELECT sess, expired FROM sessions WHERE sid = :sid"
-      ),
-      set: db.prepare(`
-        INSERT INTO sessions (sid, sess, expired)
-        VALUES (:sid, :sess, :expired)
-        ON CONFLICT(sid) DO UPDATE SET
-          sess = excluded.sess,
-          expired = excluded.expired
-      `),
-      touch: db.prepare(
-        "UPDATE sessions SET expired = :expired WHERE sid = :sid"
-      ),
-      destroy: db.prepare(
-        "DELETE FROM sessions WHERE sid = :sid"
-      ),
-      length: db.prepare("SELECT COUNT(*) as count FROM sessions"),
-      clear: db.prepare("DELETE FROM sessions"),
-    };
+  if (!response.ok) {
+    const errorBody = await response.text();
+    console.error(
+      `[Rollout API] ${method} ${url.toString()} failed: ${response.status} ${errorBody}`
+    );
+    const error = new Error(
+      `Rollout API request failed with status ${response.status}`
+    );
+    error.status = response.status;
+    error.body = errorBody;
+    throw error;
   }
 
-  cleanup() {
-    this.statements.cleanup.run({ now: Date.now() });
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const json = await response.json();
+    console.log(
+      `[Rollout API] ${method} ${url.toString()} succeeded: ${response.status}`,
+      JSON.stringify(json).slice(0, 2000)
+    );
+    return json;
+  }
+  const text = await response.text();
+  console.log(
+    `[Rollout API] ${method} ${url.toString()} succeeded: ${response.status} ${text.slice(
+      0,
+      2000
+    )}`
+  );
+  return text;
+}
+
+async function resolveDefaultCredentialId(req, explicitCredentialId) {
+  if (
+    typeof explicitCredentialId === "string" &&
+    explicitCredentialId.trim().length > 0
+  ) {
+    req.session.defaultCredentialId = explicitCredentialId.trim();
+    return explicitCredentialId.trim();
   }
 
-  computeExpiry(sessionData) {
-    const cookie = sessionData?.cookie;
-    let ttl = this.defaultTTL;
-    if (cookie) {
-      if (cookie.expires) {
-        const expiresAt = new Date(cookie.expires).getTime();
-        if (!Number.isNaN(expiresAt)) {
-          ttl = expiresAt - Date.now();
+  const cached =
+    typeof req.session.defaultCredentialId === "string" &&
+    req.session.defaultCredentialId.length > 0
+      ? req.session.defaultCredentialId
+      : null;
+  if (cached) {
+    return cached;
+  }
+
+  const data = await callRolloutApi(req, {
+    baseUrl: ROLLOUT_API_BASE,
+    path: "/credentials",
+    searchParams: {
+      includeProfile: "true",
+      includeData: "true",
+    },
+  });
+  const credentials = extractItems(data);
+  const first = credentials.find((credential) => {
+    if (!credential || credential.id === undefined || credential.id === null) {
+      return false;
+    }
+    return String(credential.id).trim().length > 0;
+  });
+  if (!first) {
+    return null;
+  }
+  const normalizedId = String(first.id).trim();
+  req.session.defaultCredentialId = normalizedId;
+  return normalizedId;
+}
+
+async function fetchPersonById(req, credentialId, personId) {
+  const trimmedId = personId.trim();
+  try {
+    return await callRolloutApi(req, {
+      baseUrl: ROLLOUT_CRM_API_BASE,
+      path: `/people/${encodeURIComponent(trimmedId)}`,
+      credentialId,
+    });
+  } catch (err) {
+    if (err.status === 404) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function fetchPersonByEmail(req, credentialId, email) {
+  const normalizedEmail = email.trim().toLowerCase();
+  let next = null;
+  let iterations = 0;
+
+  while (iterations < MAX_PAGINATED_REQUESTS) {
+    const searchParams = { limit: 100 };
+    if (next) {
+      searchParams.next = next;
+    }
+    const data = await callRolloutApi(req, {
+      baseUrl: ROLLOUT_CRM_API_BASE,
+      path: "/people",
+      searchParams,
+      credentialId,
+    });
+
+    const people = Array.isArray(data?.people)
+      ? data.people
+      : extractItems(data);
+    const match = people.find((person) => {
+      if (!person || !Array.isArray(person.emails)) {
+        return false;
+      }
+      return person.emails.some((entry) => {
+        if (!entry || typeof entry.value !== "string") {
+          return false;
         }
-      } else if (cookie.maxAge) {
-        ttl = cookie.maxAge;
-      }
-    }
-    if (!Number.isFinite(ttl) || ttl <= 0) {
-      ttl = this.defaultTTL;
-    }
-    return Date.now() + ttl;
-  }
-
-  get(sid, callback = () => {}) {
-    try {
-      const row = this.statements.get.get({ sid });
-      if (!row) {
-        callback(null, null);
-        return;
-      }
-      if (row.expired <= Date.now()) {
-        this.statements.destroy.run({ sid });
-        callback(null, null);
-        return;
-      }
-      const sessionData = JSON.parse(row.sess);
-      callback(null, sessionData);
-    } catch (err) {
-      callback(err);
-    }
-  }
-
-  set(sid, sessionData, callback = () => {}) {
-    try {
-      const expired = this.computeExpiry(sessionData);
-      this.statements.set.run({
-        sid,
-        sess: JSON.stringify(sessionData),
-        expired,
+        return entry.value.trim().toLowerCase() === normalizedEmail;
       });
-      this.cleanup();
-      callback(null);
-    } catch (err) {
-      callback(err);
+    });
+    if (match) {
+      return match;
     }
+
+    next =
+      typeof data?._metadata?.next === "string" &&
+      data._metadata.next.length > 0
+        ? data._metadata.next
+        : null;
+    if (!next) {
+      break;
+    }
+    iterations += 1;
+  }
+  return null;
+}
+
+async function fetchPersonCollection(
+  req,
+  credentialId,
+  personId,
+  {
+    path,
+    responseKey,
+    personField = "personId",
+    processor,
+    sorter,
+    // Optional: include extra query params (e.g., personId) required by certain endpoints
+    additionalSearchParams,
+    // Optional: custom matcher to decide if an item belongs to a person
+    personMatcher,
+  }
+) {
+  if (personId === undefined || personId === null) {
+    return [];
+  }
+  const normalizedPersonId = String(personId).trim();
+  if (!normalizedPersonId) {
+    return [];
   }
 
-  destroy(sid, callback = () => {}) {
-    try {
-      this.statements.destroy.run({ sid });
-      callback(null);
-    } catch (err) {
-      callback(err);
+  const collected = [];
+  let next = null;
+  let iterations = 0;
+
+  while (
+    iterations < MAX_PAGINATED_REQUESTS &&
+    collected.length < PERSON_RECORDS_LIMIT
+  ) {
+    const searchParams = { limit: 100 };
+    // Merge in any additional search params (can be object or function)
+    if (additionalSearchParams) {
+      const extra =
+        typeof additionalSearchParams === "function"
+          ? additionalSearchParams(normalizedPersonId)
+          : additionalSearchParams;
+      if (extra && typeof extra === "object") {
+        for (const [k, v] of Object.entries(extra)) {
+          if (v !== undefined && v !== null && v !== "") {
+            searchParams[k] = String(v);
+          }
+        }
+      }
     }
+    if (next) {
+      searchParams.next = next;
+    }
+
+    const data = await callRolloutApi(req, {
+      baseUrl: ROLLOUT_CRM_API_BASE,
+      path,
+      searchParams,
+      credentialId,
+    });
+
+    let items = responseKey ? data?.[responseKey] : null;
+    if (!Array.isArray(items)) {
+      items = extractItems(data);
+    }
+
+    for (const item of items) {
+      if (!item) {
+        continue;
+      }
+      let matches = false;
+      if (typeof personMatcher === "function") {
+        try {
+          matches = Boolean(personMatcher(item, normalizedPersonId));
+        } catch (_e) {
+          matches = false;
+        }
+      } else {
+        const personValue = item[personField];
+        const itemPersonId =
+          personValue === undefined || personValue === null
+            ? ""
+            : String(personValue).trim();
+        matches = Boolean(itemPersonId && itemPersonId === normalizedPersonId);
+      }
+      if (!matches) {
+        continue;
+      }
+
+      const processed = processor ? processor(item) : item;
+      if (!processed) {
+        continue;
+      }
+
+      collected.push(processed);
+      if (collected.length >= PERSON_RECORDS_LIMIT) {
+        break;
+      }
+    }
+
+    if (collected.length >= PERSON_RECORDS_LIMIT) {
+      break;
+    }
+
+    next =
+      typeof data?._metadata?.next === "string" &&
+      data._metadata.next.length > 0
+        ? data._metadata.next
+        : null;
+    if (!next) {
+      break;
+    }
+    iterations += 1;
   }
 
-  touch(sid, sessionData, callback = () => {}) {
-    try {
-      const expired = this.computeExpiry(sessionData);
-      this.statements.touch.run({ sid, expired });
-      callback(null);
-    } catch (err) {
-      callback(err);
-    }
-  }
+  const ordered = sorter ? sorter([...collected]) : collected;
+  return ordered.slice(0, PERSON_RECORDS_LIMIT);
+}
 
-  length(callback = () => {}) {
-    try {
-      const row = this.statements.length.get();
-      callback(null, row?.count ?? 0);
-    } catch (err) {
-      callback(err);
-    }
-  }
+async function fetchPersonEvents(req, credentialId, personId) {
+  return fetchPersonCollection(req, credentialId, personId, {
+    path: "/events",
+    responseKey: "events",
+  });
+}
 
-  clear(callback = () => {}) {
-    try {
-      this.statements.clear.run();
-      callback(null);
-    } catch (err) {
-      callback(err);
+async function fetchPersonNotes(req, credentialId, personId) {
+  return fetchPersonCollection(req, credentialId, personId, {
+    path: "/notes",
+    responseKey: "notes",
+  });
+}
+
+async function fetchPersonCalls(req, credentialId, personId) {
+  return fetchPersonCollection(req, credentialId, personId, {
+    path: "/calls",
+    responseKey: "calls",
+  });
+}
+
+async function fetchPersonTextMessages(req, credentialId, personId) {
+  return fetchPersonCollection(req, credentialId, personId, {
+    path: "/textMessages",
+    // API requires personId for GET /textMessages; include it in query
+    additionalSearchParams: (normalizedPersonId) => ({ personId: normalizedPersonId }),
+    // Response key varies; rely on extractItems fallback
+  });
+}
+
+async function fetchPersonAppointments(req, credentialId, personId) {
+  const now = Date.now();
+  return fetchPersonCollection(req, credentialId, personId, {
+    path: "/appointments",
+    responseKey: "appointments",
+    processor: (appointment) => {
+      // Support both camelCase (startsAt/endsAt) and short keys (start/end)
+      const endsRaw = appointment?.endsAt || appointment?.end;
+      const startsRaw = appointment?.startsAt || appointment?.start;
+      const ends = endsRaw ? Date.parse(endsRaw) : Number.NaN;
+      const starts = startsRaw ? Date.parse(startsRaw) : Number.NaN;
+      const reference = !Number.isNaN(ends)
+        ? ends
+        : !Number.isNaN(starts)
+        ? starts
+        : Number.NaN;
+      return {
+        ...appointment,
+        _sortTimestamp: !Number.isNaN(reference)
+          ? reference
+          : Date.parse(appointment?.updated || appointment?.created || 0),
+      };
+    },
+    sorter: (items) =>
+      items
+        .sort(
+          (a, b) => (b._sortTimestamp || Number.MIN_SAFE_INTEGER) - (a._sortTimestamp || Number.MIN_SAFE_INTEGER)
+        )
+        .map(({ _sortTimestamp, ...rest }) => rest),
+    personMatcher: (appointment, normalizedPersonId) => {
+      const topLevel =
+        appointment && appointment.personId !== undefined && appointment.personId !== null
+          ? String(appointment.personId).trim()
+          : "";
+      if (topLevel && topLevel === normalizedPersonId) {
+        return true;
+      }
+      const invitees = Array.isArray(appointment?.invitees)
+        ? appointment.invitees
+        : [];
+      return invitees.some((inv) => {
+        if (!inv || inv.personId === undefined || inv.personId === null) {
+          return false;
+        }
+        const pid = String(inv.personId).trim();
+        return Boolean(pid && pid === normalizedPersonId);
+      });
+    },
+  });
+}
+
+async function fetchPersonTasks(req, credentialId, personId) {
+  return fetchPersonCollection(req, credentialId, personId, {
+    path: "/tasks",
+    responseKey: "tasks",
+  });
+}
+
+async function createAppointment(req, credentialId, body) {
+  const sanitizedBody = { ...body };
+  const coerceDateField = (key) => {
+    if (!sanitizedBody[key]) {
+      return;
     }
-  }
+    if (typeof sanitizedBody[key] === "number") {
+      return;
+    }
+    if (sanitizedBody[key] instanceof Date) {
+      sanitizedBody[key] = sanitizedBody[key].toISOString();
+      return;
+    }
+    if (typeof sanitizedBody[key] === "string") {
+      const parsed = Date.parse(sanitizedBody[key]);
+      if (!Number.isNaN(parsed)) {
+        sanitizedBody[key] = new Date(parsed).toISOString();
+      }
+    }
+  };
+
+  coerceDateField("startsAt");
+  coerceDateField("endsAt");
+
+  return callRolloutApi(req, {
+    baseUrl: ROLLOUT_CRM_API_BASE,
+    path: "/appointments",
+    method: "POST",
+    credentialId,
+    body: sanitizedBody,
+  });
 }
 
 // Respect the Render proxy so secure cookies are transmitted correctly.
@@ -355,7 +598,6 @@ app.use(
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    store: new BetterSqlite3Store(sessionDb),
     cookie: {
       maxAge: SESSION_MAX_AGE_MS,
       sameSite: "lax",
@@ -369,18 +611,6 @@ app.use(express.json());
 app.use((req, res, next) => {
   console.log(`[Server] ${req.method} ${req.originalUrl}`);
   next();
-});
-
-app.post("/webhooks", (req, res) => {
-  const payload = {
-    id: randomUUID(),
-    receivedAt: new Date().toISOString(),
-    headers: req.headers,
-    body: req.body,
-  };
-  console.log("Received Rollout webhook:", payload);
-  persistReceivedWebhook(payload);
-  res.status(204).end();
 });
 
 function createRolloutToken(req, consumerKey = DEFAULT_CONSUMER_KEY) {
@@ -426,208 +656,19 @@ app.get("/rollout-token", (req, res) => {
   }
 });
 
-async function callRolloutApi(
-  req,
-  {
-    baseUrl,
-    path,
-    method = "GET",
-    searchParams,
-    body,
-    consumerKey,
-    headers,
-  }
-) {
-  const resolvedConsumerKey = sanitizeConsumerKey(consumerKey) || DEFAULT_CONSUMER_KEY;
-  const token = createRolloutToken(req, resolvedConsumerKey);
-  const sanitizedPath = path.startsWith("/") ? path.slice(1) : path;
-  const normalizedBase = baseUrl.endsWith("/")
-    ? baseUrl
-    : `${baseUrl}/`;
-  const url = new URL(sanitizedPath, normalizedBase);
-  if (searchParams) {
-    for (const [key, value] of Object.entries(searchParams)) {
-      if (value !== undefined && value !== null) {
-        url.searchParams.set(key, String(value));
-      }
-    }
-  }
-
-  console.log(`[Rollout API] ${method} ${url.toString()}`);
-  if (body) {
-    console.log(`[Rollout API] Payload:`, body);
-  }
-
-  const response = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body ? { "Content-Type": "application/json" } : {}),
-      ...(headers || {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    const error = new Error(
-      `Rollout API request failed with status ${response.status}`
-    );
-    error.status = response.status;
-    error.body = errorBody;
-    throw error;
-  }
-
-  const contentType = response.headers.get("content-type");
-  if (contentType && contentType.includes("application/json")) {
-    const json = await response.json();
-    console.log(`[Rollout API] Response (${response.status}):`, json);
-    return json;
-  }
-
-  const text = await response.text();
-  console.log(`[Rollout API] Response (${response.status}):`, text);
-  return text;
-}
-
-app.get("/api/credentials", async (req, res) => {
-  try {
-    const data = await callRolloutApi(req, {
-      baseUrl: ROLLOUT_API_BASE,
-      path: "/credentials",
-      searchParams: {
-        includeProfile: "true",
-        includeData: "true",
-      },
-      consumerKey: resolveConsumerKey(req, req.query.consumerKey),
-    });
-    console.log(
-      `[Server] Retrieved ${Array.isArray(data) ? data.length : "unknown"} credentials`
-    );
-    res.json(data);
-  } catch (err) {
-    if (err.status === 404) {
-      console.warn("No credentials found for current consumer");
-      res.json([]);
-      return;
-    }
-    console.error("Error fetching credentials from Rollout", err);
-    const status = err.status || 500;
-    res
-      .status(status)
-      .json({
-        error: "Failed to fetch credentials",
-        details: err.body,
-        message: err.message,
-      });
-  }
-});
-
-app.get("/api/webhooks", async (req, res) => {
-  try {
-    const { offset, limit, next, credentialId } = req.query;
-    if (!credentialId) {
-      res.status(400).json({ error: "credentialId query parameter is required" });
-      return;
-    }
-    const data = await callRolloutApi(req, {
-      baseUrl: ROLLOUT_CRM_API_BASE,
-      path: "/webhooks",
-      searchParams: {
-        offset,
-        limit,
-        next,
-      },
-      consumerKey: resolveConsumerKey(req, req.query.consumerKey),
-      headers: {
-        "x-rollout-credential-id": credentialId,
-      },
-    });
-    console.log(
-      `[Server] Retrieved ${Array.isArray(data) ? data.length : "unknown"} webhooks`
-    );
-    res.json(data);
-  } catch (err) {
-    if (err.status === 404) {
-      console.warn("No webhook subscriptions found for current consumer");
-      res.json([]);
-      return;
-    }
-    console.error("Error fetching webhooks from Rollout", err);
-    const status = err.status || 500;
-    res
-      .status(status)
-      .json({
-        error: "Failed to fetch webhooks",
-        details: err.body,
-        message: err.message,
-      });
-  }
-});
-
-app.post("/api/webhooks", async (req, res) => {
-  const { url, event, filters, consumerKey, credentialId } = req.body || {};
-
-  const webhookUrl = url || DEFAULT_WEBHOOK_TARGET;
-
-  if (!webhookUrl || !event) {
-    res.status(400).json({ error: "Webhook url and event are required" });
-    return;
-  }
-
-  if (!credentialId) {
-    res.status(400).json({ error: "Webhook credentialId is required" });
-    return;
-  }
-
-  try {
-    const payload = {
-      url: webhookUrl,
-      event,
-    };
-
-    if (
-      filters &&
-      typeof filters === "object" &&
-      Object.keys(filters).length > 0
-    ) {
-      payload.filters = filters;
-    }
-
-    const data = await callRolloutApi(req, {
-      baseUrl: ROLLOUT_CRM_API_BASE,
-      path: "/webhooks",
-      method: "POST",
-      body: payload,
-      consumerKey: resolveConsumerKey(req, consumerKey),
-      headers: {
-        "x-rollout-credential-id": credentialId,
-      },
-    });
-    res.status(201).json(data);
-  } catch (err) {
-    console.error("Error creating webhook subscription", err);
-    const status = err.status || 500;
-    res
-      .status(status)
-      .json({
-        error: "Failed to create webhook",
-        details: err.body,
-        message: err.message,
-      });
-  }
-});
-
 app.get("/api/session/rollout-client", (req, res) => {
-  const stored = getSessionRolloutClientCredentials(req);
+  const sessionCreds = getSessionRolloutClientCredentials(req);
+  const effectiveCreds = getEffectiveRolloutClientCredentials(req);
+  const usingEnvironment =
+    !sessionCreds &&
+    Boolean(DEFAULT_ROLLOUT_CLIENT_ID && DEFAULT_ROLLOUT_CLIENT_SECRET);
   res.json({
-    configured: Boolean(stored),
-    clientId: stored?.clientId || "",
-    updatedAt:
-      typeof req.session?.rolloutClientCredentials?.updatedAt === "string"
-        ? req.session.rolloutClientCredentials.updatedAt
-        : null,
+    configured: Boolean(effectiveCreds),
+    clientId: effectiveCreds?.clientId || "",
+    updatedAt: sessionCreds?.updatedAt || null,
     defaultClientId: DEFAULT_ROLLOUT_CLIENT_ID,
+    usingEnvironment,
+    sessionClientId: sessionCreds?.clientId || "",
   });
 });
 
@@ -648,15 +689,20 @@ app.post("/api/session/rollout-client", (req, res) => {
     clientSecret: sanitizedSecret,
     updatedAt: new Date().toISOString(),
   };
+  delete req.session.defaultCredentialId;
 
   res.json({
     configured: true,
     clientId: sanitizedId,
+    defaultClientId: DEFAULT_ROLLOUT_CLIENT_ID,
+    usingEnvironment: false,
+    sessionClientId: sanitizedId,
   });
 });
 
 app.delete("/api/session/rollout-client", (req, res) => {
   delete req.session.rolloutClientCredentials;
+  delete req.session.defaultCredentialId;
   res.status(204).end();
 });
 
@@ -694,97 +740,680 @@ app.post("/api/session/consumer-key", (req, res) => {
   });
 });
 
-app.get("/api/session/accordion", (req, res) => {
-  const stored = req.session.accordionState;
-  const accordionState = normalizeAccordionState(stored);
-  res.json({ accordionState });
+app.get("/api/credentials", async (req, res) => {
+  try {
+    const data = await callRolloutApi(req, {
+      baseUrl: ROLLOUT_API_BASE,
+      path: "/credentials",
+      searchParams: {
+        includeProfile: "true",
+        includeData: "true",
+      },
+      consumerKey: req.query.consumerKey,
+    });
+    const credentials = extractItems(data)
+      .map((credential) => {
+        if (!credential || typeof credential !== "object") {
+          return null;
+        }
+        const id =
+          typeof credential.id === "string" && credential.id.trim().length > 0
+            ? credential.id.trim()
+            : null;
+        if (!id) {
+          return null;
+        }
+        const appKey =
+          typeof credential.appKey === "string" ? credential.appKey : "";
+        const accountName =
+          typeof credential.profile?.accountName === "string"
+            ? credential.profile.accountName
+            : "";
+        const label = accountName || appKey || id;
+        return { id, label, appKey, accountName };
+      })
+      .filter(Boolean);
+    res.json({ credentials });
+  } catch (err) {
+    console.error("Error fetching Rollout credentials", err);
+    const status = err.status || 500;
+    res
+      .status(status)
+      .json({ error: err.message || "Failed to fetch credentials" });
+  }
 });
 
-app.post("/api/session/accordion", (req, res) => {
-  const { accordionState } = req.body || {};
-  if (
-    !accordionState ||
-    typeof accordionState !== "object" ||
-    Array.isArray(accordionState)
-  ) {
+app.get("/api/people", async (req, res) => {
+  const limitParam = Number.parseInt(req.query.limit, 10);
+  const limit =
+    Number.isFinite(limitParam) && limitParam > 0 && limitParam <= 100
+      ? limitParam
+      : 20;
+  const pageLimit = Math.min(100, Math.max(1, limit));
+  const credentialOverride =
+    typeof req.query.credentialId === "string"
+      ? req.query.credentialId.trim()
+      : undefined;
+
+  try {
+    const credentialId = await resolveDefaultCredentialId(
+      req,
+      credentialOverride
+    );
+    if (!credentialId) {
+      res.status(400).json({
+        error: "No Rollout credentials available. Connect a provider first.",
+      });
+      return;
+    }
+
+    const people = [];
+    const seenIds = new Set();
+    let next = null;
+    let iterations = 0;
+
+    while (iterations < MAX_PAGINATED_REQUESTS && people.length < limit) {
+      const searchParams = { limit: pageLimit };
+      if (next) {
+        searchParams.next = next;
+      }
+
+      const data = await callRolloutApi(req, {
+        baseUrl: ROLLOUT_CRM_API_BASE,
+        path: "/people",
+        searchParams,
+        credentialId,
+      });
+
+      const items = extractItems(data);
+      for (const person of items) {
+        if (!person || person.id === undefined || person.id === null) {
+          continue;
+        }
+        const rawId =
+          typeof person.id === "string" || typeof person.id === "number"
+            ? person.id
+            : String(person.id);
+        const id = String(rawId).trim();
+        if (!id || seenIds.has(id)) {
+          continue;
+        }
+        const fullName = [person.firstName, person.lastName]
+          .filter((value) => typeof value === "string" && value.trim().length > 0)
+          .join(" ")
+          .trim();
+        let email = "";
+        if (Array.isArray(person.emails)) {
+          const primaryEmail =
+            person.emails.find((entry) => entry?.isPrimary) || person.emails[0];
+          if (primaryEmail && typeof primaryEmail.value === "string") {
+            email = primaryEmail.value.trim();
+          }
+        }
+        const labelParts = [fullName || null, email || null].filter(Boolean);
+        const label = labelParts.length > 0 ? labelParts.join(" · ") : id;
+        people.push({ id, label });
+        seenIds.add(id);
+        if (people.length >= limit) {
+          break;
+        }
+      }
+
+      if (people.length >= limit) {
+        break;
+      }
+      next =
+        typeof data?._metadata?.next === "string" && data._metadata.next.length > 0
+          ? data._metadata.next
+          : null;
+      if (!next) {
+        break;
+      }
+      iterations += 1;
+    }
+
+    res.json({ people });
+  } catch (err) {
+    console.error("Error fetching people", err);
+    const status = err.status || 500;
+    res
+      .status(status)
+      .json({ error: err.message || "Failed to fetch people" });
+  }
+});
+
+async function fetchAppointmentMetadata(req, credentialId, { path, label }) {
+  const data = await callRolloutApi(req, {
+    baseUrl: ROLLOUT_CRM_API_BASE,
+    path,
+    credentialId,
+  });
+  return extractItems(data)
+    .filter((item) => item && item.id !== undefined && item.id !== null)
+    .map((item) => {
+      const id = String(item.id).trim();
+      if (!id) {
+        return null;
+      }
+      const text =
+        typeof item.name === "string" && item.name.trim().length > 0
+          ? item.name.trim()
+          : typeof item.label === "string" && item.label.trim().length > 0
+          ? item.label.trim()
+          : `${label} ${id}`;
+      return { id, label: text };
+    })
+    .filter(Boolean);
+}
+
+async function fetchFirstAppointmentTypeId(req, credentialId) {
+  try {
+    const data = await callRolloutApi(req, {
+      baseUrl: ROLLOUT_CRM_API_BASE,
+      path: "/appointment-types",
+      credentialId,
+    });
+    const items = extractItems(data);
+    const first = items.find(
+      (t) => t && (typeof t.id === "string" || typeof t.id === "number")
+    );
+    return first ? String(first.id).trim() : null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+app.get("/api/appointment-metadata", async (req, res) => {
+  const credentialOverride =
+    typeof req.query.credentialId === "string"
+      ? req.query.credentialId.trim()
+      : undefined;
+  try {
+    const credentialId = await resolveDefaultCredentialId(
+      req,
+      credentialOverride
+    );
+    if (!credentialId) {
+      res.status(400).json({
+        error:
+          "No Rollout credentials available. Connect a provider first to continue.",
+      });
+      return;
+    }
+
+    const [types, outcomes] = await Promise.all([
+      fetchAppointmentMetadata(req, credentialId, {
+        path: "/appointment-types",
+        label: "Type",
+      }),
+      fetchAppointmentMetadata(req, credentialId, {
+        path: "/appointment-outcomes",
+        label: "Outcome",
+      }),
+    ]);
+
+    res.json({ types, outcomes });
+  } catch (err) {
+    console.error("Error fetching appointment metadata", err);
+    const status = err.status || 500;
+    res
+      .status(status)
+      .json({ error: err.message || "Failed to fetch appointment metadata" });
+  }
+});
+
+app.get("/api/users", async (req, res) => {
+  const credentialOverride =
+    typeof req.query.credentialId === "string"
+      ? req.query.credentialId.trim()
+      : undefined;
+  const limitParam = Number.parseInt(req.query.limit, 10);
+  const limit =
+    Number.isFinite(limitParam) && limitParam > 0 && limitParam <= 500
+      ? limitParam
+      : 100;
+  const pageLimit = Math.min(100, Math.max(1, limit));
+
+  try {
+    const credentialId = await resolveDefaultCredentialId(
+      req,
+      credentialOverride
+    );
+    if (!credentialId) {
+      res.status(400).json({
+        error:
+          "No Rollout credentials available. Connect a provider first to continue.",
+      });
+      return;
+    }
+
+    const users = [];
+    const seen = new Set();
+    let next = null;
+    let iterations = 0;
+    while (iterations < MAX_PAGINATED_REQUESTS && users.length < limit) {
+      const searchParams = { limit: pageLimit };
+      if (next) searchParams.next = next;
+      const data = await callRolloutApi(req, {
+        baseUrl: ROLLOUT_CRM_API_BASE,
+        path: "/users",
+        searchParams,
+        credentialId,
+      });
+      const items = extractItems(data);
+      for (const u of items) {
+        const id =
+          u && (typeof u.id === "string" || typeof u.id === "number")
+            ? String(u.id).trim()
+            : "";
+        if (!id || seen.has(id)) continue;
+        const name = [u.firstName, u.lastName]
+          .filter((v) => typeof v === "string" && v.trim().length > 0)
+          .join(" ")
+          .trim();
+        const email = typeof u.email === "string" ? u.email.trim() : "";
+        const label = name || email || id;
+        users.push({ id, label });
+        seen.add(id);
+        if (users.length >= limit) break;
+      }
+      if (users.length >= limit) break;
+      next =
+        typeof data?._metadata?.next === "string" && data._metadata.next.length > 0
+          ? data._metadata.next
+          : null;
+      if (!next) break;
+      iterations += 1;
+    }
+    res.json({ users });
+  } catch (err) {
+    console.error("Error fetching users", err);
+    const status = err.status || 500;
+    res
+      .status(status)
+      .json({ error: err.message || "Failed to fetch users" });
+  }
+});
+
+async function resolveDefaultUserId(req, credentialId) {
+  try {
+    const data = await callRolloutApi(req, {
+      baseUrl: ROLLOUT_CRM_API_BASE,
+      path: "/users",
+      searchParams: { limit: 1 },
+      credentialId,
+    });
+    const items = extractItems(data);
+    const first = items.find(
+      (u) => u && (typeof u.id === "string" || typeof u.id === "number")
+    );
+    return first ? String(first.id).trim() : null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+app.post("/api/appointments", async (req, res) => {
+  const {
+    credentialId: credentialOverride,
+    personId,
+    userId,
+    appointmentTypeId,
+    appointmentOutcomeId,
+    title,
+    description,
+    location,
+    isAllDay,
+    startsAt,
+    endsAt,
+  } = req.body || {};
+
+  try {
+    const credentialId = await resolveDefaultCredentialId(req, credentialOverride);
+    if (!credentialId) {
+      res.status(400).json({
+        error:
+          "No Rollout credentials available. Connect a provider first to continue.",
+      });
+      return;
+    }
+
+    // Validate required fields: personId, title, location
+    const problems = [];
+    if (!(typeof personId === "string" && personId.trim())) problems.push("personId");
+    if (!(typeof title === "string" && title.trim())) problems.push("title");
+    if (!(typeof location === "string" && location.trim())) problems.push("location");
+    if (problems.length > 0) {
+      res.status(400).json({
+        error: `Missing required fields: ${problems.join(", ")}`,
+      });
+      return;
+    }
+
+    // Determine effective appointmentTypeId if not provided (some connectors require it)
+    let effectiveTypeId =
+      typeof appointmentTypeId === "string" && appointmentTypeId.trim()
+        ? appointmentTypeId.trim()
+        : null;
+    if (!effectiveTypeId) {
+      effectiveTypeId = await fetchFirstAppointmentTypeId(req, credentialId);
+    }
+
+    const body = {
+      personId: String(personId).trim(),
+      title: title.trim(),
+      location: location.trim(),
+    };
+    if (effectiveTypeId) {
+      body.appointmentTypeId = effectiveTypeId;
+    }
+    if (typeof userId === "string" && userId.trim()) {
+      body.userId = userId.trim();
+    } else {
+      const fallbackUserId = await resolveDefaultUserId(req, credentialId);
+      if (fallbackUserId) {
+        body.userId = fallbackUserId;
+      }
+    }
+    if (
+      typeof appointmentOutcomeId === "string" &&
+      appointmentOutcomeId.trim()
+    )
+      body.appointmentOutcomeId = appointmentOutcomeId.trim();
+    if (typeof description === "string") body.description = description;
+    if (typeof isAllDay === "boolean") body.isAllDay = isAllDay;
+    if (startsAt !== undefined && startsAt !== null && startsAt !== "")
+      body.startsAt = startsAt;
+    if (endsAt !== undefined && endsAt !== null && endsAt !== "")
+      body.endsAt = endsAt;
+
+    let created;
+    try {
+      created = await callRolloutApi(req, {
+        baseUrl: ROLLOUT_CRM_API_BASE,
+        path: "/appointments",
+        method: "POST",
+        body,
+        credentialId,
+      });
+    } catch (firstErr) {
+      // Fallback: some connectors reject certain fields or prefer alternative keys.
+      const errBody = String(firstErr?.body || "");
+      const status = firstErr?.status || 0;
+      const invalidFields = [];
+      const match = errBody.match(/Invalid fields[^:]*:\s*([^\"]+)/i);
+      if (match && match[1]) {
+        for (const token of match[1].split(/[\s,]+/).map((t) => t.trim()).filter(Boolean)) {
+          invalidFields.push(token.replace(/\.$/, ""));
+        }
+      }
+      // Parse missing required properties from 422 validation errors
+      const missingRequired = new Set();
+      if (status === 422) {
+        try {
+          const parsed = JSON.parse(errBody);
+          const errs = Array.isArray(parsed?.errors) ? parsed.errors : [];
+          for (const e of errs) {
+            const p = typeof e?.path === "string" ? e.path : "";
+            const m = typeof e?.message === "string" ? e.message.toLowerCase() : "";
+            if (p.startsWith("/") && m.includes("required")) {
+              missingRequired.add(p.slice(1));
+            }
+          }
+        } catch (_e) {}
+      }
+
+      // Construct a sanitized fallback body (minimal + invitees mapping)
+      const fallback = { title: body.title, location: body.location };
+      if (body.description) fallback.description = body.description;
+      // Use start/end keys if startsAt/endsAt were flagged; otherwise pass through if present
+      if (body.startsAt) {
+        if (invalidFields.includes("startsAt")) fallback.start = body.startsAt;
+        else fallback.startsAt = body.startsAt;
+      }
+      if (body.endsAt) {
+        if (invalidFields.includes("endsAt")) fallback.end = body.endsAt;
+        else fallback.endsAt = body.endsAt;
+      }
+      // Associate person and user
+      const invitees = [];
+      if (body.personId) invitees.push({ personId: body.personId });
+      if (body.userId) invitees.push({ userId: body.userId });
+      if (invitees.length > 0) fallback.invitees = invitees;
+      // Include appointmentTypeId if we have one and it was not flagged invalid
+      if (body.appointmentTypeId && !invalidFields.includes("appointmentTypeId")) {
+        fallback.appointmentTypeId = body.appointmentTypeId;
+      }
+      // If the first failure was 422 for missing required, make sure to include personId/type
+      if (status === 422) {
+        if (body.personId && (missingRequired.has("personId") || !invalidFields.includes("personId"))) {
+          fallback.personId = body.personId;
+        }
+        if (!fallback.appointmentTypeId && missingRequired.has("appointmentTypeId")) {
+          const typeId = await fetchFirstAppointmentTypeId(req, credentialId);
+          if (typeId) fallback.appointmentTypeId = typeId;
+        }
+      }
+
+      try {
+        created = await callRolloutApi(req, {
+          baseUrl: ROLLOUT_CRM_API_BASE,
+          path: "/appointments",
+          method: "POST",
+          body: fallback,
+          credentialId,
+        });
+      } catch (secondErr) {
+        // If still failing due to missing/invalid type for connectors without types endpoint,
+        // try a few safe default strings for appointmentTypeId.
+        const secondBody = String(secondErr?.body || "");
+        const secondStatus = secondErr?.status || 0;
+        let needsType = false;
+        if (secondStatus === 422) {
+          try {
+            const parsed = JSON.parse(secondBody);
+            const errs = Array.isArray(parsed?.errors) ? parsed.errors : [];
+            needsType = errs.some((e) => String(e?.path) === "/appointmentTypeId");
+          } catch (_e) {}
+        }
+        if (needsType && !fallback.appointmentTypeId) {
+          const candidates = [
+            "Other",
+            "Default",
+            "Appointment",
+            "Meeting",
+            "Consultation",
+            "1",
+          ];
+          let lastErr = secondErr;
+          for (const candidate of candidates) {
+            try {
+              const attempt = { ...fallback, appointmentTypeId: candidate };
+              created = await callRolloutApi(req, {
+                baseUrl: ROLLOUT_CRM_API_BASE,
+                path: "/appointments",
+                method: "POST",
+                body: attempt,
+                credentialId,
+              });
+              lastErr = null;
+              break;
+            } catch (e) {
+              lastErr = e;
+            }
+          }
+          if (lastErr) throw lastErr;
+        } else {
+          throw secondErr;
+        }
+      }
+    }
+
+    res.status(201).json(created);
+  } catch (err) {
+    console.error("Error creating appointment", err);
+    const status = err.status || 500;
+    res
+      .status(status)
+      .json({ error: err.body || err.message || "Failed to create appointment" });
+  }
+});
+
+app.get("/api/person-insights", async (req, res) => {
+  const identifierType =
+    typeof req.query.identifierType === "string"
+      ? req.query.identifierType
+      : "";
+  const value =
+    typeof req.query.value === "string" ? req.query.value.trim() : "";
+  const credentialOverride =
+    typeof req.query.credentialId === "string"
+      ? req.query.credentialId.trim()
+      : undefined;
+
+  if (!["personId", "email"].includes(identifierType)) {
     res
       .status(400)
-      .json({ error: "accordionState must be an object containing booleans" });
+      .json({ error: "identifierType must be either personId or email" });
     return;
   }
-
-  const normalized = normalizeAccordionState(accordionState);
-  req.session.accordionState = normalized;
-  res.json({ accordionState: normalized });
-});
-
-app.get("/api/session/webhook-target", (req, res) => {
-  const storedTarget = req.session.webhookTarget;
-  res.json({
-    webhookTarget:
-      typeof storedTarget === "string" && storedTarget.length > 0
-        ? storedTarget
-        : DEFAULT_WEBHOOK_TARGET,
-  });
-});
-
-app.post("/api/session/webhook-target", (req, res) => {
-  const { webhookTarget } = req.body || {};
-  if (typeof webhookTarget !== "string") {
-    res.status(400).json({ error: "webhookTarget must be a string" });
-    return;
-  }
-
-  req.session.webhookTarget = webhookTarget.trim();
-  res.json({ webhookTarget: req.session.webhookTarget });
-});
-
-app.delete("/api/webhooks/:id", async (req, res) => {
-  const { id } = req.params;
-  const { credentialId, consumerKey } = req.query;
-
-  if (!id) {
-    res.status(400).json({ error: "Webhook id is required" });
-    return;
-  }
-
-  if (!credentialId) {
-    res.status(400).json({ error: "credentialId query parameter is required" });
+  if (!value) {
+    res.status(400).json({ error: "value is required" });
     return;
   }
 
   try {
-    await callRolloutApi(req, {
-      baseUrl: ROLLOUT_CRM_API_BASE,
-      path: `/webhooks/${id}`,
-      method: "DELETE",
-      consumerKey: resolveConsumerKey(req, consumerKey),
-      headers: {
-        "x-rollout-credential-id": credentialId,
-      },
+    const credentialId = await resolveDefaultCredentialId(
+      req,
+      credentialOverride
+    );
+    if (!credentialId) {
+      res.status(400).json({
+        error:
+          "No Rollout credentials available. Connect a provider first to continue.",
+      });
+      return;
+    }
+
+    let person;
+    if (identifierType === "personId") {
+      person = await fetchPersonById(req, credentialId, value);
+    } else {
+      person = await fetchPersonByEmail(req, credentialId, value);
+    }
+
+    if (!person) {
+      res.status(404).json({
+        error:
+          identifierType === "personId"
+            ? `No person found with id ${value}`
+            : `No person found with email ${value}`,
+      });
+      return;
+    }
+
+    // Ensure we handle numeric IDs as well as strings
+    const personId =
+      person && person.id !== undefined && person.id !== null
+        ? String(person.id).trim()
+        : null;
+    let events = [];
+    let notes = [];
+    let calls = [];
+    let textMessages = [];
+    let appointments = [];
+    let tasks = [];
+
+    if (personId) {
+      const results = await Promise.allSettled([
+        fetchPersonEvents(req, credentialId, personId),
+        fetchPersonNotes(req, credentialId, personId),
+        fetchPersonCalls(req, credentialId, personId),
+        fetchPersonTextMessages(req, credentialId, personId),
+        fetchPersonAppointments(req, credentialId, personId),
+        fetchPersonTasks(req, credentialId, personId),
+      ]);
+
+      const coerce = (idx, label) => {
+        const r = results[idx];
+        if (r && r.status === "fulfilled" && Array.isArray(r.value)) {
+          return r.value;
+        }
+        if (r && r.status === "rejected") {
+          const err = r.reason || {};
+          const msg = typeof err?.body === "string" ? err.body : String(err?.message || err);
+          console.warn(`Suppressed ${label} fetch error; treating as empty.`, msg);
+        }
+        return [];
+      };
+
+      events = coerce(0, "events");
+      notes = coerce(1, "notes");
+      calls = coerce(2, "calls");
+      textMessages = coerce(3, "textMessages");
+      appointments = coerce(4, "appointments");
+      tasks = coerce(5, "tasks");
+    }
+
+    res.json({
+      person,
+      events,
+      notes,
+      calls,
+      textMessages,
+      appointments,
+      tasks,
     });
-    res.status(204).end();
   } catch (err) {
-    console.error("Error deleting webhook subscription", err);
+    console.error("Error fetching person insights", err);
     const status = err.status || 500;
     res
       .status(status)
-      .json({
-        error: "Failed to delete webhook",
-        details: err.body,
-        message: err.message,
-      });
+      .json({ error: err.message || "Failed to fetch person insights" });
   }
 });
 
-app.get("/api/received-webhooks", (_req, res) => {
-  res.json(getStoredWebhooks());
-});
+app.post("/api/appointments", async (req, res) => {
+  const credentialOverride =
+    typeof req.query.credentialId === "string"
+      ? req.query.credentialId.trim()
+      : undefined;
+  try {
+    const credentialId = await resolveDefaultCredentialId(
+      req,
+      credentialOverride
+    );
+    if (!credentialId) {
+      res.status(400).json({
+        error:
+          "No Rollout credentials available. Connect a provider first to continue.",
+      });
+      return;
+    }
 
-app.delete("/api/received-webhooks", (_req, res) => {
-  clearStoredWebhooks();
-  console.log("[Server] Cleared received webhook log");
-  res.status(204).end();
+    const payload = req.body || {};
+    const requiredFields = ["personId", "appointmentTypeId", "title", "location"];
+    const missing = requiredFields.filter((field) => {
+      const value = payload[field];
+      return value === undefined || value === null || String(value).trim().length === 0;
+    });
+
+    if (missing.length > 0) {
+      res.status(400).json({
+        error: `Missing required fields: ${missing.join(", ")}`,
+      });
+      return;
+    }
+
+    const result = await createAppointment(req, credentialId, payload);
+    res.status(201).json(result);
+  } catch (err) {
+    console.error("Error creating appointment", err);
+    const status = err.status || 500;
+    res
+      .status(status)
+      .json({ error: err.message || "Failed to create appointment" });
+  }
 });
 
 const clientDistPath = path.join(__dirname, "client", "dist");

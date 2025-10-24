@@ -549,6 +549,300 @@ main {
   word-break: break-word;
 }
 
+.section-subtitle {
+  margin: 0 0 0.75rem;
+  color: #475569;
+  font-size: 0.95rem;
+}
+
+.person-lookup-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.person-lookup-form label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #1f2937;
+}
+
+.person-lookup-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  width: 100%;
+}
+
+.person-lookup-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  width: 100%;
+}
+
+.person-lookup-controls select,
+.person-lookup-controls input,
+.person-lookup-row select,
+.appointment-form select,
+.appointment-form input,
+.appointment-form textarea {
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid #d0d7de;
+  font-size: 0.95rem;
+  background: #fff;
+  min-width: 140px;
+}
+
+.person-lookup-controls select:focus-visible,
+.person-lookup-controls input:focus-visible,
+.person-lookup-row select:focus-visible,
+.appointment-form select:focus-visible,
+.appointment-form input:focus-visible,
+.appointment-form textarea:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.person-lookup-controls button {
+  padding: 0.55rem 0.95rem;
+  border-radius: 8px;
+  border: 1px solid #1d4ed8;
+  background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.person-lookup-controls button:disabled {
+  opacity: 0.7;
+  cursor: wait;
+  box-shadow: none;
+}
+
+.person-lookup-controls button:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.25);
+}
+
+.person-insights-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.person-insights-summary h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+}
+
+.person-insights-meta {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.person-insights-meta .label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+  margin-bottom: 0.1rem;
+}
+
+.person-insights-raw summary {
+  font-weight: 600;
+  cursor: pointer;
+  color: #2563eb;
+}
+
+.person-insights-raw pre {
+  margin-top: 0.75rem;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 0.85rem;
+  border-radius: 10px;
+  overflow: auto;
+  max-height: 320px;
+  font-size: 0.85rem;
+}
+
+.person-insights-events,
+.person-insights-notes,
+.person-insights-calls,
+.person-insights-texts,
+.person-insights-appointments,
+.person-insights-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.appointment-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.appointment-form .form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.appointment-form .form-row > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 160px;
+  flex: 1 1 200px;
+}
+
+.appointment-form label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #1f2937;
+}
+
+.appointment-form textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+.appointment-form button {
+  align-self: flex-start;
+  padding: 0.6rem 1.2rem;
+  border-radius: 8px;
+  border: 1px solid #1d4ed8;
+  background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.appointment-form button:disabled {
+  opacity: 0.7;
+  cursor: wait;
+  box-shadow: none;
+}
+
+.appointment-form button:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.25);
+}
+
+.event-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.event-list li {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 0.9rem 1rem;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.event-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.event-summary-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.event-type {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #1d4ed8;
+}
+
+.event-message {
+  font-size: 0.95rem;
+  color: #0f172a;
+}
+
+.event-timestamp {
+  font-size: 0.83rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.event-meta {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  font-size: 0.83rem;
+}
+
+.event-meta .label,
+.event-link .label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+  margin-right: 0.3rem;
+}
+
+.event-link {
+  font-size: 0.85rem;
+  color: #0f172a;
+}
+
+.event-link a {
+  color: #2563eb;
+  word-break: break-all;
+}
+
+.event-list details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #2563eb;
+}
+
+.event-list details pre {
+  margin-top: 0.6rem;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 0.85rem;
+  border-radius: 10px;
+  overflow: auto;
+  max-height: 320px;
+  font-size: 0.85rem;
+}
+
 .error {
   color: #b91c1c;
   margin: 0;

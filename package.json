@@ -1,5 +1,5 @@
 {
-  "name": "webhooks-test-app",
+  "name": "crm-activity-sync",
   "version": "1.0.0",
   "description": "Demo Express app for Rollout.com webhook testing",
   "main": "index.js",
@@ -22,7 +22,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "better-sqlite3": "^12.4.1",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.19.2",
