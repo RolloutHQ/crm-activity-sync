@@ -1,56 +1,77 @@
-# Rollout Activity Sync Demo
+# Rollout CRM Activity Sync
 
-A full-stack demo for exercising Rollout credential management and webhook flows. The project exposes a small Express backend with a Vite-powered React UI.
+This project is a focused demo for exploring Rollout CRM activity data. It bundles a lightweight Express server with a React UI so you can:
+
+- connect with Rollout Link using your client credentials,
+- browse connected credentials and people records,
+- inspect recent CRM activity (events, notes, calls, texts, appointments, tasks),
+- and create new appointments against a selected credential.
+
+The backend handles token generation and Rollout API calls, while the frontend provides an interactive workflow for testing against live CRM data.
+
+## Project layout
+
+- `index.js` / `src/` – Express server, session handling, and Rollout API helpers.
+- `client/` – Vite + React single-page app for credential management and person insights.
+- `rollout-crm-openapi.json` – reference OpenAPI schema for local exploration.
+- `render.yaml` – optional Render deployment configuration.
 
 ## Prerequisites
 
-- Node.js 18+ (22.x tested)
+- Node.js 18+ (22.x validated)
 - npm 9+
-- Rollout client credentials
+- Rollout client credentials with CRM permissions
 
-## Local Development
+## Environment configuration
+
+1. Copy `.env.example` to `.env`.
+2. Populate the required variables:
+   - `ROLLOUT_CLIENT_ID` / `ROLLOUT_CLIENT_SECRET` — client credentials used to mint JWTs for the Link session.
+   - `SESSION_SECRET` — random string for cookie signing (do not share).
+3. Optional overrides:
+   - `ROLLOUT_CONSUMER_KEY` — default consumer key if none is set in the session.
+   - `ALLOWED_ORIGINS` — comma-delimited list of origins allowed to access the API during development.
+   - `ROLLOUT_API_BASE` / `ROLLOUT_CRM_API_BASE` — target a non-production Rollout environment.
+   - `PERSON_RECORDS_LIMIT`, `MAX_PAGINATED_REQUESTS`, `ROLLOUT_TOKEN_TTL_SECS`, `SESSION_MAX_AGE_MS`, `PORT`.
+
+Frontend-specific options can go in `client/.env.local` if you need them; for example `VITE_ROLLOUT_CONSUMER_KEY` seeds the consumer key field in the UI.
+
+## Run locally
+
+Install dependencies (this installs both server and client packages):
 
 ```bash
 npm install
+```
+
+Start both the server (Express on `5174`) and client (Vite on `5173`):
+
+```bash
 npm run dev
 ```
 
-The dev script runs both the Express server (port `5174`) and the Vite client (port `5173`). The Vite dev server proxies `/api/*` requests to the backend.
+The Vite dev server proxies `/api/*` requests to the Express backend and persists session data in memory. Visit http://localhost:5173 to use the app.
 
-Create a `.env` file using `.env.example` as a template. At minimum you must set `ROLLOUT_CLIENT_ID`, `ROLLOUT_CLIENT_SECRET`, and `SESSION_SECRET`.
+## Available scripts
 
-## Building
+| Script | Description |
+| --- | --- |
+| `npm run dev` | Runs the Express server with `nodemon` and the React client with Vite. |
+| `npm run server` / `client` | Start either half independently during development. |
+| `npm run build` | Builds the React frontend into `client/dist`; Express will serve these assets in production mode. |
+| `npm start` | Launches the Express server only (expects a pre-built `client/dist`). |
 
-```bash
-npm run build
-```
+## Deploying
 
-This produces the production React build in `client/dist`. When present, Express serves the static assets automatically.
+Any Node-capable host works: run `npm install`, then `npm run build`, and finally `npm start`. Provide the same environment variables you use locally. The included `render.yaml` gives a head start for Render deployments; adjust names and env vars as needed.
 
-## Deploying to Render
+## Troubleshooting
 
-1. **Push the repo** to a Git provider (GitHub, GitLab, Bitbucket).
-2. **Create a new Web Service** on [render.com](https://render.com):
-   - Environment: `Node`
-   - Plan: `Free` (upgrade later if you need persistent uptime)
-   - Build command: `npm install && npm run build`
-   - Start command: `npm start`
-3. **Set environment variables** in Render’s dashboard:
-   - `ROLLOUT_CLIENT_ID`, `ROLLOUT_CLIENT_SECRET`
-   - `ROLLOUT_CONSUMER_KEY` (optional, defaults to `demo-consumer`)
-   - `VITE_ROLLOUT_CONSUMER_KEY` (optional, seeds the UI’s consumer key field; defaults to `demo-consumer`)
-   - `ROLLOUT_API_BASE`, `ROLLOUT_CRM_API_BASE` (defaults provided)
-   - `DEFAULT_WEBHOOK_TARGET`
-   - `ALLOWED_ORIGINS` (include your Render URL, e.g. `https://your-app.onrender.com`)
-   - `SESSION_SECRET` (use a long random string)
-   - Optional: `SESSION_DB_PATH` (defaults to `./session-data/sessions.sqlite`), `WEBHOOK_DB_PATH` (defaults to `./session-data/webhooks.sqlite`), `SESSION_MAX_AGE_MS`, `MAX_RECEIVED_WEBHOOKS`, `ROLLOUT_TOKEN_TTL_SECS`
-4. **Deploy**. Render will install dependencies, build the client, and run `npm start`.
-5. **Verify** by visiting the Render URL (for example, `https://your-app.onrender.com`) and testing credential listing, webhook subscription, and the webhook log UI.
+- **401 errors from Rollout API:** confirm that client credentials are set either via `.env` or through the “Configure client credentials” form in the UI.
+- **Empty people dropdown:** ensure the connected credential has people data and that the configured consumer key has access.
+- **CORS failures:** update `ALLOWED_ORIGINS` to include your frontend origin (e.g. `http://localhost:5173` or the deployed URL).
 
-> ℹ️ A `render.yaml` file is included if you prefer infrastructure-as-code. Adjust the service name, region, and env vars as needed.
+## Next steps
 
-Sessions persist between restarts via a local SQLite database stored under `session-data/`. Render’s free plan retains this file on disk even when the service sleeps, so consumer-key overrides and other session state survive restarts without any external datastore.
-
-## Webhook Tunnel (Local Testing)
-
-Use a tool like `ngrok http 5174` to expose your local server. Update the “Webhook Target” field in the UI (or `DEFAULT_WEBHOOK_TARGET`) with the public URL plus `/webhooks`.
+- Leverage `rollout-crm-openapi.json` with tools like Stoplight or Postman for deeper API exploration.
+- Extend `src/routes/` with additional CRM endpoints (tasks, deals, etc.) as needed.
