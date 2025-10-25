@@ -479,25 +479,8 @@ export default function App() {
   // Appointment metadata handled in AppointmentForm component
   useEffect(() => {}, [clientCredentialsConfigured, selectedCredentialId]);
 
-  // Load users for selected credential (for default/explicit user assignment)
-  useEffect(() => {
-    if (!clientCredentialsConfigured) {
-      setUserOptions([]);
-      setSelectedUserId("");
-      setUserOptionsError(null);
-      setUserOptionsLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setUserOptionsLoading(true);
-    setUserOptionsError(null);
-    const params = new URLSearchParams();
-    if (selectedCredentialId) params.set("credentialId", selectedCredentialId);
-    // handled in AppointmentForm component
-    return () => {
-      cancelled = true;
-    };
-  }, [clientCredentialsConfigured, selectedCredentialId]);
+  // Users list handled in AppointmentForm component
+  useEffect(() => {}, [clientCredentialsConfigured, selectedCredentialId]);
 
   // handled in AppointmentForm component
 
