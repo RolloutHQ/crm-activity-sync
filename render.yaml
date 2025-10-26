@@ -1,9 +1,9 @@
 services:
   - type: web
-    name: rollout-webhooks-demo
+    name: crm-activity-sync
     env: node
     plan: free
-    region: oregon
+    region: ohio
     buildCommand: npm install && npm run build
     startCommand: npm start
     autoDeploy: true
@@ -16,3 +16,12 @@ services:
         sync: false
       - key: SESSION_SECRET
         generateValue: true
+      # Optional overrides; leave unset to use defaults in src/config.js
+      - key: ROLLOUT_CONSUMER_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: ROLLOUT_API_BASE
+        sync: false
+      - key: ROLLOUT_CRM_API_BASE
+        sync: false
